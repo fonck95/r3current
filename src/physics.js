@@ -97,35 +97,42 @@ export function step(world, dt) {
   }
 }
 
-// Get vertices for any shape
+// Get vertices for any shape - MUST MATCH SHADER ROTATION EXACTLY
 function getVertices(body) {
-  const cx = body.x + body.w / 2;
-  const cy = body.y + body.h / 2;
   const cos = Math.cos(body.rotation);
   const sin = Math.sin(body.rotation);
   
-  const rotate = (x, y) => {
-    const dx = x - cx;
-    const dy = y - cy;
+  // This function rotates a corner in normalized space (0-1)
+  // then transforms to world space - matching the shader exactly
+  const transformCorner = (cornerX, cornerY) => {
+    // Rotate in normalized space around center (0.5, 0.5)
+    const offsetX = cornerX - 0.5;
+    const offsetY = cornerY - 0.5;
+    const rotatedX = offsetX * cos - offsetY * sin;
+    const rotatedY = offsetX * sin + offsetY * cos;
+    const localX = rotatedX + 0.5;
+    const localY = rotatedY + 0.5;
+    
+    // Transform to world space
     return {
-      x: cx + dx * cos - dy * sin,
-      y: cy + dx * sin + dy * cos
+      x: body.x + localX * body.w,
+      y: body.y + localY * body.h
     };
   };
   
   if (body.shape === 'rect') {
     return [
-      rotate(body.x, body.y),
-      rotate(body.x + body.w, body.y),
-      rotate(body.x + body.w, body.y + body.h),
-      rotate(body.x, body.y + body.h)
+      transformCorner(0, 0),
+      transformCorner(1, 0),
+      transformCorner(1, 1),
+      transformCorner(0, 1)
     ];
   } else if (body.shape === 'triangle') {
-    // Triangle with flat bottom (better for platforming)
+    // Triangle with flat bottom - matches shader rendering
     return [
-      rotate(body.x + body.w / 2, body.y),           // Top center
-      rotate(body.x + body.w, body.y + body.h),      // Bottom right
-      rotate(body.x, body.y + body.h)                // Bottom left
+      transformCorner(0.5, 0),  // Top center
+      transformCorner(1, 1),    // Bottom right
+      transformCorner(0, 1)     // Bottom left
     ];
   }
   return [];
@@ -407,14 +414,24 @@ function resolveCollision(body, other, result) {
 
 export function pointInBrick(brick, px, py) {
   if (brick.shape === 'circle') {
-    const cx = brick.x + brick.w / 2;
-    const cy = brick.y + brick.h / 2;
-    const r = Math.min(brick.w, brick.h) / 2;
-    const dx = px - cx;
-    const dy = py - cy;
-    return (dx * dx + dy * dy) <= r * r;
+    // For circles, transform point to local rotated space
+    const localX = (px - brick.x) / brick.w;
+    const localY = (py - brick.y) / brick.h;
+    
+    // Rotate point around center (0.5, 0.5) in opposite direction
+    const cos = Math.cos(-brick.rotation);
+    const sin = Math.sin(-brick.rotation);
+    const offsetX = localX - 0.5;
+    const offsetY = localY - 0.5;
+    const rotatedX = offsetX * cos - offsetY * sin + 0.5;
+    const rotatedY = offsetX * sin + offsetY * cos + 0.5;
+    
+    // Check if point is in unit circle
+    const dx = rotatedX - 0.5;
+    const dy = rotatedY - 0.5;
+    return (dx * dx + dy * dy) <= 0.25; // 0.5^2
   } else if (brick.shape === 'triangle' || brick.shape === 'rect') {
-    // Point-in-polygon test with rotation
+    // Point-in-polygon test with rotated vertices
     const vertices = getVertices(brick);
     if (vertices.length === 0) return false;
     

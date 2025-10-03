@@ -530,15 +530,28 @@ function loop(time) {
   }
   
   // Render
-  drawables = world.bodies.map(b => {
-    if (b === player) return player.toDrawable();
-    return {
-      x: b.x, y: b.y, w: b.w, h: b.h,
-      shape: b.shape || 'rect',
-      color: b.color || [0.8, 0.4, 0.2, 1.0],
-      rotation: b.rotation || 0
-    };
+  drawables = [];
+  
+  // Agregar todos los bodies (excepto el player)
+  world.bodies.forEach(b => {
+    if (b !== player) {
+      drawables.push({
+        x: b.x, y: b.y, w: b.w, h: b.h,
+        shape: b.shape || 'rect',
+        color: b.color || [0.8, 0.4, 0.2, 1.0],
+        rotation: b.rotation || 0
+      });
+    }
   });
+  
+  // El player ahora retorna MÚLTIPLES drawables (todo el humanoide)
+  if (player) {
+    const playerDrawables = player.toDrawable();
+    drawables.push(...playerDrawables); // Spread operator para agregar todos
+  }
+  
+  // Debug: mostrar collision box (descomentar para ver el bounding box)
+  // drawables.push(player.getCollisionBox());
   
   // Floor
   drawables.push({
@@ -601,8 +614,9 @@ function loop(time) {
   const mode = editMode ? 'EDICIÓN' : 'JUEGO';
   const renderer = useWebGPU ? 'WebGPU' : 'Canvas2D';
   const rotInfo = editMode ? ` | Rotación: ${selectedRotation.toFixed(0)}°` : '';
+  const animState = !editMode ? ` | Anim: ${player.animationController.currentState}` : '';
   document.getElementById('hud').textContent = 
-    `${renderer} | FPS: ${fps} | Modo: ${mode}${rotInfo}\n` +
+    `${renderer} | FPS: ${fps} | Modo: ${mode}${animState}${rotInfo}\n` +
     (editMode ? `Forma: ${selectedShape} | Bricks: ${world.bricks.length}` : 
      `A/D: Mover | Space: Saltar | Bricks: ${world.bricks.length}`);
 }
