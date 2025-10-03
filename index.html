@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>WebGPU 2D Physics - Colisiones Reales</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: #0a0a0a;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+      color: #fff;
+      position: relative;
+    }
+    #gfx {
+      width: 100%;
+      height: 100%;
+      display: block;
+      touch-action: none;
+      cursor: crosshair;
+    }
+    #gfx.edit-mode {
+      cursor: pointer;
+    }
+    #hud {
+      position: fixed;
+      top: calc(12px + env(safe-area-inset-top));
+      left: calc(12px + env(safe-area-inset-left));
+      font-size: 13px;
+      line-height: 1.5;
+      pointer-events: none;
+      text-shadow: 0 0 4px #000;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.6);
+      padding: 8px 12px;
+      border-radius: 6px;
+      backdrop-filter: blur(4px);
+    }
+    
+    /* Toggle button for panel */
+    #toggle-panel-btn {
+      position: fixed;
+      top: calc(12px + env(safe-area-inset-top));
+      right: calc(12px + env(safe-area-inset-right));
+      width: 50px;
+      height: 50px;
+      background: rgba(74, 144, 226, 0.9);
+      border: none;
+      border-radius: 50%;
+      color: #fff;
+      font-size: 24px;
+      cursor: pointer;
+      z-index: 1001;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      transition: all 0.3s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #toggle-panel-btn:hover {
+      background: rgba(74, 144, 226, 1);
+      transform: scale(1.1);
+    }
+    
+    /* Floating delete button */
+    #delete-selected {
+      position: fixed;
+      bottom: calc(80px + env(safe-area-inset-bottom));
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 16px 32px;
+      background: rgba(220, 50, 50, 0.95);
+      backdrop-filter: blur(8px);
+      border: 2px solid rgba(255, 100, 100, 0.5);
+      border-radius: 12px;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      z-index: 1000;
+      box-shadow: 0 8px 24px rgba(220, 50, 50, 0.4);
+      transition: all 0.3s ease;
+      opacity: 0;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #delete-selected.visible {
+      pointer-events: all;
+    }
+    #delete-selected:hover {
+      background: rgba(255, 60, 60, 1);
+      transform: translateX(-50%) scale(1.05);
+      box-shadow: 0 12px 32px rgba(220, 50, 50, 0.6);
+    }
+    #delete-selected:active {
+      transform: translateX(-50%) scale(0.98);
+    }
+    
+    /* Floating editor panel */
+    #editor-panel {
+      position: fixed;
+      top: calc(80px + env(safe-area-inset-top));
+      right: calc(12px + env(safe-area-inset-right));
+      width: 300px;
+      max-height: calc(100vh - 100px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+      background: rgba(20, 20, 25, 0.92);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      overflow-y: auto;
+      user-select: none;
+      z-index: 1000;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+      transition: all 0.3s ease;
+      transform-origin: top right;
+    }
+    #editor-panel.hidden {
+      opacity: 0;
+      pointer-events: none;
+      transform: scale(0.95) translateY(-10px);
+    }
+    
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+      #editor-panel {
+        width: calc(100vw - 24px);
+        right: 12px;
+        left: 12px;
+        max-height: 60vh;
+      }
+    }
+    
+    @media (max-height: 600px) {
+      #editor-panel {
+        max-height: calc(100vh - 80px);
+        padding: 15px;
+        gap: 15px;
+      }
+    }
+    
+    .panel-section {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .panel-section h3 {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #aaa;
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+    button {
+      padding: 12px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: rgba(42, 42, 62, 0.8);
+      color: #fff;
+    }
+    button:hover {
+      background: rgba(58, 58, 94, 0.9);
+      transform: translateY(-1px);
+    }
+    button.active {
+      background: rgba(74, 144, 226, 0.9);
+      box-shadow: 0 0 20px rgba(74, 144, 226, 0.4);
+    }
+    .shape-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .shape-btn {
+      aspect-ratio: 1;
+      padding: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      background: rgba(42, 42, 62, 0.8);
+      border: 2px solid transparent;
+    }
+    .shape-btn.active {
+      border-color: #4a90e2;
+      background: rgba(58, 58, 94, 0.9);
+    }
+    .color-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+    }
+    .color-btn {
+      aspect-ratio: 1;
+      border-radius: 50%;
+      border: 3px solid transparent;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .color-btn:hover {
+      transform: scale(1.1);
+    }
+    .color-btn.active {
+      border-color: #fff;
+      transform: scale(1.15);
+      box-shadow: 0 0 12px rgba(255, 255, 255, 0.5);
+    }
+    .rotation-control {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .rotation-slider-container {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    #rotation-slider {
+      flex: 1;
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.1);
+      outline: none;
+      -webkit-appearance: none;
+    }
+    #rotation-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #4a90e2;
+      cursor: pointer;
+      box-shadow: 0 0 10px rgba(74, 144, 226, 0.5);
+    }
+    #rotation-slider::-moz-range-thumb {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #4a90e2;
+      cursor: pointer;
+      border: none;
+      box-shadow: 0 0 10px rgba(74, 144, 226, 0.5);
+    }
+    #rotation-value {
+      min-width: 45px;
+      text-align: right;
+      font-weight: 600;
+      color: #4a90e2;
+    }
+    .rotation-presets {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+    .rotation-preset {
+      padding: 8px;
+      font-size: 12px;
+      background: rgba(42, 42, 62, 0.8);
+    }
+    .rotation-preset:hover {
+      background: rgba(58, 58, 94, 0.9);
+    }
+    .info-text {
+      font-size: 12px;
+      color: #999;
+      line-height: 1.5;
+    }
+    .divider {
+      height: 1px;
+      background: rgba(255,255,255,0.1);
+    }
+    #delete-hint {
+      position: fixed;
+      bottom: calc(20px + env(safe-area-inset-bottom));
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(74, 144, 226, 0.95);
+      backdrop-filter: blur(8px);
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      z-index: 999;
+      text-align: center;
+    }
+    #delete-hint.show {
+      opacity: 1;
+    }
+    
+    /* Scrollbar styling */
+    #editor-panel::-webkit-scrollbar {
+      width: 6px;
+    }
+    #editor-panel::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 3px;
+    }
+    #editor-panel::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 3px;
+    }
+    #editor-panel::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.5);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gfx"></canvas>
+  
+  <div id="hud"></div>
+  
+  <button id="toggle-panel-btn" title="Mostrar/Ocultar Panel">⚙️</button>
+  
+  <button id="delete-selected">
+    🗑️ Eliminar Figura Seleccionada
+  </button>
+  
+  <div id="editor-panel" class="hidden">
+    <div class="panel-section">
+      <button id="toggle-edit">🔧 Activar Edición</button>
+    </div>
+
+    <div class="divider"></div>
+    
+    <div class="panel-section">
+      <h3>Forma</h3>
+      <div class="shape-grid">
+        <button class="shape-btn active" data-shape="rect">⬜</button>
+        <button class="shape-btn" data-shape="circle">⚫</button>
+        <button class="shape-btn" data-shape="triangle">🔺</button>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <h3>Color</h3>
+      <div class="color-grid" id="color-palette"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="panel-section">
+      <h3>Rotación</h3>
+      <div class="rotation-control">
+        <div class="rotation-slider-container">
+          <input type="range" id="rotation-slider" min="0" max="360" value="0" step="1">
+          <span id="rotation-value">0°</span>
+        </div>
+        <div class="rotation-presets">
+          <button class="rotation-preset" data-angle="0">0°</button>
+          <button class="rotation-preset" data-angle="45">45°</button>
+          <button class="rotation-preset" data-angle="90">90°</button>
+          <button class="rotation-preset" data-angle="135">135°</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="panel-section">
+      <h3>Modo Edición</h3>
+      <p class="info-text">
+        <strong>Click en figura:</strong> Seleccionar<br>
+        <strong>Shift + Click:</strong> Cambiar color<br>
+        <strong>Ctrl + Click:</strong> Copiar rotación<br>
+        <strong>Arrastrar figura:</strong> Mover<br>
+        <strong>Rueda del ratón:</strong> Rotar figura<br>
+        <strong>Arrastrar vacío:</strong> Crear nueva figura
+      </p>
+    </div>
+
+    <div class="panel-section">
+      <button id="clear-all">🗑️ Limpiar Todo</button>
+    </div>
+  </div>
+
+  <div id="delete-hint">Shift: Color | Ctrl: Copiar rotación | Rueda: Rotar</div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
