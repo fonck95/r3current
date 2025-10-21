@@ -1,16 +1,18 @@
-import { Player } from './player.js';
+import { Player } from '../gameplay/player.js';
 import {
   createWorld,
   step,
   loadBricks,
   serializeBricks,
-} from './physics.js';
-import { BabylonRenderer } from './babylonRenderer.js';
-
-export const VIRTUAL_WIDTH = 1920;
-export const VIRTUAL_HEIGHT = 1080;
-const FIXED_DT = 1 / 60;
-const MAX_DT = 0.02;
+} from '../physics/index.js';
+import { BabylonRenderer } from '../renderer/babylon/renderer.js';
+import {
+  VIRTUAL_WIDTH,
+  VIRTUAL_HEIGHT,
+  FIXED_DELTA,
+  MAX_DELTA,
+  FLOOR_HEIGHT,
+} from '../core/constants.js';
 
 export class GameRuntime {
   constructor(canvas) {
@@ -31,6 +33,15 @@ export class GameRuntime {
     });
   }
 
+  async initialize() {
+    await this.renderer.initialize();
+    this.loadPersistedBricks();
+  }
+
+  dispose() {
+    this.renderer?.dispose();
+  }
+
   getWorld() {
     return this.world;
   }
@@ -44,12 +55,7 @@ export class GameRuntime {
   }
 
   getMaxDelta() {
-    return MAX_DT;
-  }
-
-  async initialize() {
-    this.renderer.initialize();
-    this.loadPersistedBricks();
+    return MAX_DELTA;
   }
 
   handleKeyDown(event, isEditMode) {
@@ -64,6 +70,7 @@ export class GameRuntime {
   }
 
   update(dt, isEditMode) {
+    this.isEditMode = Boolean(isEditMode);
     if (isEditMode) {
       return;
     }
@@ -71,10 +78,10 @@ export class GameRuntime {
     this.player.input(this.keys);
 
     this.accumulator += dt;
-    while (this.accumulator >= FIXED_DT) {
-      this.player.update(this.world, FIXED_DT);
-      step(this.world, FIXED_DT);
-      this.accumulator -= FIXED_DT;
+    while (this.accumulator >= FIXED_DELTA) {
+      this.player.update(this.world, FIXED_DELTA);
+      step(this.world, FIXED_DELTA);
+      this.accumulator -= FIXED_DELTA;
     }
   }
 
@@ -134,9 +141,9 @@ export class GameRuntime {
     drawables.push({
       id: 'floor',
       x: 0,
-      y: VIRTUAL_HEIGHT - 60,
+      y: VIRTUAL_HEIGHT - FLOOR_HEIGHT,
       w: VIRTUAL_WIDTH,
-      h: 60,
+      h: FLOOR_HEIGHT,
       shape: 'rect',
       color: [0.3, 0.3, 0.3, 1.0],
       rotation: 0,
@@ -190,14 +197,16 @@ export class GameRuntime {
   composeHud({ dt, editMode, selectedShape, selectedRotation, activeLayer }) {
     const fps = dt > 0 ? (1 / dt).toFixed(0) : '0';
     const mode = editMode ? 'EDICIÓN' : 'JUEGO';
-    const renderer = 'Babylon.js';
+    const rendererName = this.renderer.getDisplayName
+      ? this.renderer.getDisplayName()
+      : 'Babylon.js';
     const rotInfo = editMode ? ` | Rotación: ${selectedRotation.toFixed(0)}°` : '';
     const animState = !editMode ? ` | Anim: ${this.player.animationController.currentState}` : '';
     const bricks = this.world.bricks.length;
     const layerDisplay = Number.isFinite(activeLayer) ? Math.round(activeLayer) : this.activeEditLayer;
     const layerInfo = editMode ? ` | Capa: ${layerDisplay}` : '';
 
-    const statusLine = `${renderer} | FPS: ${fps} | Modo: ${mode}${animState}${rotInfo}${layerInfo}`;
+    const statusLine = `${rendererName} | FPS: ${fps} | Modo: ${mode}${animState}${rotInfo}${layerInfo}`;
     const helpLine = editMode
       ? `Forma: ${selectedShape} | Bricks: ${bricks}`
       : `A/D: Mover | Space: Saltar | Bricks: ${bricks}`;
@@ -234,6 +243,7 @@ export class GameRuntime {
     if (this.drawables.length) {
       this.renderer.syncDrawables(this.drawables);
     }
+    return this.isEditMode;
   }
 
   adjustEditCameraDistance(deltaY) {

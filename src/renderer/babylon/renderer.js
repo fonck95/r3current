@@ -14,6 +14,7 @@ export class BabylonRenderer {
     this.virtualWidth = virtualWidth || 1920;
     this.virtualHeight = virtualHeight || 1080;
     this.engine = null;
+    this.engineType = 'webgl';
     this.scene = null;
     this.camera = null;
     this.meshPool = new Map();
@@ -43,14 +44,35 @@ export class BabylonRenderer {
     return Math.max(this.canvasWidth, this.canvasHeight) * 8;
   }
 
-  initialize() {
-    const { BABYLON } = window;
+  async createEngine(BABYLON) {
+    const supportsWebGPU =
+      BABYLON.WebGPUEngine && BABYLON.WebGPUEngine.IsSupportedAsync
+        ? await BABYLON.WebGPUEngine.IsSupportedAsync
+        : false;
 
-    this.engine = new BABYLON.Engine(this.canvas, true, {
+    if (supportsWebGPU) {
+      try {
+        const engine = new BABYLON.WebGPUEngine(this.canvas);
+        await engine.initAsync();
+        this.engineType = 'webgpu';
+        return engine;
+      } catch (error) {
+        console.warn('WebGPU no disponible, usando motor WebGL clásico.', error);
+      }
+    }
+
+    this.engineType = 'webgl';
+    return new BABYLON.Engine(this.canvas, true, {
       preserveDrawingBuffer: true,
       stencil: true,
       disableWebGL2Support: false,
     });
+  }
+
+  async initialize() {
+    const { BABYLON } = window;
+
+    this.engine = await this.createEngine(BABYLON);
 
     this.scene = new BABYLON.Scene(this.engine);
     this.scene.clearColor = new BABYLON.Color4(0.05, 0.05, 0.05, 1.0);
@@ -93,6 +115,7 @@ export class BabylonRenderer {
     this.activeEditLayer = 0;
     this.editCameraDistance = 0;
     this.lastDepthIndex = 0;
+    this.engineType = 'webgl';
   }
 
   updateViewport() {
@@ -128,6 +151,10 @@ export class BabylonRenderer {
       this.updateEditCamera();
     }
     this.engine.resize();
+  }
+
+  getDisplayName() {
+    return this.engineType === 'webgpu' ? 'Babylon.js WebGPU' : 'Babylon.js WebGL';
   }
 
   syncDrawables(drawables) {
