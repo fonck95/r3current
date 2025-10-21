@@ -3,6 +3,15 @@ function colorKey(color) {
 }
 
 const EDIT_DEPTH_STEP = 40;
+const EDIT_VIEW_PRESETS = {
+  iso: { yaw: -Math.PI * 0.9, pitch: Math.PI / 12 },
+  front: { yaw: Math.PI, pitch: 0 },
+  side: { yaw: -Math.PI / 2, pitch: 0 },
+  top: { yaw: Math.PI, pitch: Math.PI / 2 - 0.2 },
+};
+const EDIT_MIN_PITCH = -Math.PI / 2 + 0.05;
+const EDIT_MAX_PITCH = Math.PI / 2 - 0.05;
+const ORBIT_SENSITIVITY = 0.0045;
 
 export class BabylonRenderer {
   constructor(canvas, { virtualWidth, virtualHeight } = {}) {
@@ -30,6 +39,10 @@ export class BabylonRenderer {
     this.activeEditLayer = 0;
     this.editCameraDistance = 0;
     this.lastDepthIndex = 0;
+    this.editViewMode = 'iso';
+    this.editOrbitYaw = EDIT_VIEW_PRESETS.iso.yaw;
+    this.editOrbitPitch = EDIT_VIEW_PRESETS.iso.pitch;
+    this.editTargetWorldOffset = { x: 0, y: 0 };
   }
 
   getDefaultEditCameraDistance() {
@@ -116,6 +129,10 @@ export class BabylonRenderer {
     this.editCameraDistance = 0;
     this.lastDepthIndex = 0;
     this.engineType = 'webgl';
+    this.editViewMode = 'iso';
+    this.editOrbitYaw = EDIT_VIEW_PRESETS.iso.yaw;
+    this.editOrbitPitch = EDIT_VIEW_PRESETS.iso.pitch;
+    this.editTargetWorldOffset = { x: 0, y: 0 };
   }
 
   updateViewport() {
@@ -228,8 +245,100 @@ export class BabylonRenderer {
     }
   }
 
+  setEditViewMode(mode) {
+    if (mode === 'custom') {
+      this.editViewMode = 'custom';
+      return;
+    }
+
+    const preset = EDIT_VIEW_PRESETS[mode] || EDIT_VIEW_PRESETS.iso;
+    this.editViewMode = mode in EDIT_VIEW_PRESETS ? mode : 'iso';
+    this.editOrbitYaw = preset.yaw;
+    this.editOrbitPitch = preset.pitch;
+
+    if (this.mode === 'edit') {
+      this.updateEditCamera();
+    }
+  }
+
+  orbitEditCamera(deltaX, deltaY) {
+    if (!this.camera || this.mode !== 'edit') {
+      return;
+    }
+    const hasYaw = Number.isFinite(deltaX) && Math.abs(deltaX) > 1e-6;
+    const hasPitch = Number.isFinite(deltaY) && Math.abs(deltaY) > 1e-6;
+    if (!hasYaw && !hasPitch) {
+      return;
+    }
+
+    if (hasYaw) {
+      this.editOrbitYaw += deltaX * ORBIT_SENSITIVITY;
+    }
+    if (hasPitch) {
+      this.editOrbitPitch -= deltaY * ORBIT_SENSITIVITY;
+    }
+
+    this.editViewMode = 'custom';
+    this.updateEditCamera();
+  }
+
+  panEditCamera(deltaX, deltaY) {
+    if (!this.camera || this.mode !== 'edit') {
+      return;
+    }
+    const moveX = Number.isFinite(deltaX) && Math.abs(deltaX) > 1e-4;
+    const moveY = Number.isFinite(deltaY) && Math.abs(deltaY) > 1e-4;
+    if (!moveX && !moveY) {
+      return;
+    }
+
+    if (moveX) {
+      this.editTargetWorldOffset.x += deltaX;
+    }
+    if (moveY) {
+      this.editTargetWorldOffset.y += deltaY;
+    }
+
+    this.editViewMode = 'custom';
+    this.updateEditCamera();
+  }
+
   render() {
     // El bucle de render de Babylon se ejecuta automáticamente.
+  }
+
+  screenToWorld(clientX, clientY, layerIndex) {
+    if (!this.scene || !this.camera) {
+      return null;
+    }
+
+    const { BABYLON } = window;
+    const rect = this.canvas.getBoundingClientRect();
+    const localX = clientX - rect.left;
+    const localY = clientY - rect.top;
+
+    const ray = this.scene.createPickingRay(localX, localY, BABYLON.Matrix.Identity(), this.camera, false);
+    if (!ray) {
+      return null;
+    }
+
+    const depthIndex = Number.isFinite(layerIndex) ? Math.round(layerIndex) : this.activeEditLayer;
+    const planeZ = depthIndex * EDIT_DEPTH_STEP;
+    const plane = BABYLON.Plane.FromPositionAndNormal(
+      new BABYLON.Vector3(0, 0, planeZ),
+      new BABYLON.Vector3(0, 0, 1),
+    );
+
+    const distance = ray.intersectsPlane(plane);
+    if (distance === null || distance === undefined) {
+      return null;
+    }
+
+    const hit = ray.origin.add(ray.direction.scale(distance));
+    const worldX = (hit.x + this.canvasWidth * 0.5) / this.scaleX;
+    const worldY = (this.canvasHeight * 0.5 - hit.y) / this.scaleY;
+
+    return { x: worldX, y: worldY, z: depthIndex };
   }
 
   updateEditCamera() {
@@ -241,10 +350,46 @@ export class BabylonRenderer {
     const nextDistance = this.editCameraDistance || defaultDistance;
     const distance = Math.min(Math.max(nextDistance, minDistance), maxDistance);
     this.editCameraDistance = distance;
-    const target = new BABYLON.Vector3(0, 0, this.editTargetZ);
-    const offset = new BABYLON.Vector3(-distance * 0.35, distance * 0.15, -distance);
+
+    const clampedPitch = Math.min(Math.max(this.editOrbitPitch, EDIT_MIN_PITCH), EDIT_MAX_PITCH);
+    if (clampedPitch !== this.editOrbitPitch) {
+      this.editOrbitPitch = clampedPitch;
+    }
+
+    const cosPitch = Math.cos(this.editOrbitPitch);
+    const sinPitch = Math.sin(this.editOrbitPitch);
+    const sinYaw = Math.sin(this.editOrbitYaw);
+    const cosYaw = Math.cos(this.editOrbitYaw);
+
+    const offset = new BABYLON.Vector3(
+      distance * cosPitch * sinYaw,
+      distance * sinPitch,
+      distance * cosPitch * cosYaw,
+    );
+
+    const target = new BABYLON.Vector3(
+      this.editTargetWorldOffset.x * this.scaleX,
+      -this.editTargetWorldOffset.y * this.scaleY,
+      this.editTargetZ,
+    );
+
     this.camera.setTarget(target);
     this.camera.position = BABYLON.Vector3.Add(target, offset);
+
+    if (Math.abs(Math.abs(this.editOrbitPitch) - Math.PI / 2) < 0.1) {
+      this.camera.upVector = new BABYLON.Vector3(0, 0, -1);
+    } else {
+      this.camera.upVector = new BABYLON.Vector3(0, 1, 0);
+    }
+
+    if (this.editBackground) {
+      this.editBackground.position.x = target.x;
+      this.editBackground.position.y = target.y;
+    }
+
+    if (this.mode === 'edit') {
+      this.updateEditBackground();
+    }
   }
 
   createMesh(name, drawable) {
@@ -369,6 +514,12 @@ export class BabylonRenderer {
     material.specularColor = new BABYLON.Color3(0, 0, 0);
     material.backFaceCulling = false;
     material.disableLighting = true;
+    if (material.diffuseTexture) {
+      material.diffuseTexture.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+      material.diffuseTexture.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+      material.diffuseTexture.uScale = 8;
+      material.diffuseTexture.vScale = 8;
+    }
 
     this.editBackground = BABYLON.MeshBuilder.CreatePlane('edit_bg', {
       size: 1,
@@ -383,10 +534,18 @@ export class BabylonRenderer {
 
   updateEditBackground() {
     if (!this.editBackground) return;
-    this.editBackground.scaling.x = this.canvasWidth * 1.2;
-    this.editBackground.scaling.y = this.canvasHeight * 1.2;
-    this.editBackground.position.x = 0;
-    this.editBackground.position.y = 0;
+    const spanX = Math.max(this.canvasWidth, this.virtualWidth * this.scaleX) * 6;
+    const spanY = Math.max(this.canvasHeight, this.virtualHeight * this.scaleY) * 6;
+    this.editBackground.scaling.x = spanX;
+    this.editBackground.scaling.y = spanY;
+    this.editBackground.position.x = this.editTargetWorldOffset.x * this.scaleX;
+    this.editBackground.position.y = -this.editTargetWorldOffset.y * this.scaleY;
+
+    const texture = this.editBackground.material?.diffuseTexture;
+    if (texture) {
+      texture.uScale = spanX / 256;
+      texture.vScale = spanY / 256;
+    }
   }
 
   setMode(mode) {
@@ -404,6 +563,11 @@ export class BabylonRenderer {
         if (!this.editCameraDistance) {
           this.editCameraDistance = this.getDefaultEditCameraDistance();
         }
+        if (this.editViewMode !== 'custom') {
+          const preset = EDIT_VIEW_PRESETS[this.editViewMode] || EDIT_VIEW_PRESETS.iso;
+          this.editOrbitYaw = preset.yaw;
+          this.editOrbitPitch = preset.pitch;
+        }
         this.updateEditCamera();
       }
       return;
@@ -415,6 +579,11 @@ export class BabylonRenderer {
     if (mode === 'edit') {
       this.camera.mode = BABYLON.Camera.PERSPECTIVE_CAMERA;
       this.editCameraDistance = this.getDefaultEditCameraDistance();
+      if (this.editViewMode !== 'custom') {
+        const preset = EDIT_VIEW_PRESETS[this.editViewMode] || EDIT_VIEW_PRESETS.iso;
+        this.editOrbitYaw = preset.yaw;
+        this.editOrbitPitch = preset.pitch;
+      }
       this.updateEditCamera();
       this.camera.fov = BABYLON.Tools.ToRadians(45);
       this.camera.minZ = 0.1;
@@ -426,6 +595,7 @@ export class BabylonRenderer {
       this.camera.mode = BABYLON.Camera.ORTHOGRAPHIC_CAMERA;
       this.camera.position = new BABYLON.Vector3(0, 0, -1000);
       this.camera.setTarget(BABYLON.Vector3.Zero());
+      this.camera.upVector = new BABYLON.Vector3(0, 1, 0);
       this.camera.minZ = 0.1;
       this.camera.maxZ = 8000;
       this.updateViewport();

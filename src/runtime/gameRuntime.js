@@ -188,10 +188,17 @@ export class GameRuntime {
   }
 
   screenToWorld(clientX, clientY) {
+    if (this.isEditMode && typeof this.renderer.screenToWorld === 'function') {
+      const picked = this.renderer.screenToWorld(clientX, clientY, this.activeEditLayer);
+      if (picked) {
+        return picked;
+      }
+    }
+
     const rect = this.canvas.getBoundingClientRect();
     const x = ((clientX - rect.left) / rect.width) * VIRTUAL_WIDTH;
     const y = ((clientY - rect.top) / rect.height) * VIRTUAL_HEIGHT;
-    return { x, y };
+    return { x, y, z: this.activeEditLayer };
   }
 
   composeHud({ dt, editMode, selectedShape, selectedRotation, activeLayer }) {
@@ -260,6 +267,30 @@ export class GameRuntime {
     this.activeEditLayer = nextLayer;
     if (typeof this.renderer.setEditPlane === 'function') {
       this.renderer.setEditPlane(nextLayer);
+    }
+  }
+
+  setEditViewMode(mode) {
+    if (typeof this.renderer.setEditViewMode === 'function') {
+      this.renderer.setEditViewMode(mode);
+    }
+  }
+
+  orbitEditCamera(deltaX, deltaY) {
+    if (!this.isEditMode) {
+      return;
+    }
+    if (typeof this.renderer.orbitEditCamera === 'function') {
+      this.renderer.orbitEditCamera(deltaX, deltaY);
+    }
+  }
+
+  panEditCamera(deltaX, deltaY) {
+    if (!this.isEditMode) {
+      return;
+    }
+    if (typeof this.renderer.panEditCamera === 'function') {
+      this.renderer.panEditCamera(deltaX, deltaY);
     }
   }
 }

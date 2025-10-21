@@ -255,6 +255,22 @@
       font-size: 11px;
       opacity: 0.8;
     }
+    .view-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    .view-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 12px;
+      background: rgba(42, 42, 62, 0.8);
+    }
+    .view-btn.active {
+      background: rgba(74, 144, 226, 0.85);
+      box-shadow: 0 0 14px rgba(74, 144, 226, 0.35);
+    }
     .rotation-slider-container {
       display: flex;
       align-items: center;
@@ -373,7 +389,20 @@
     </div>
 
     <div class="divider"></div>
-    
+
+    <div class="panel-section">
+      <h3>Vista 3D</h3>
+      <div class="view-grid" id="view-mode-grid">
+        <button class="view-btn active" data-view="iso">Isométrica</button>
+        <button class="view-btn" data-view="front">Frontal</button>
+        <button class="view-btn" data-view="side">Lateral</button>
+        <button class="view-btn" data-view="top">Superior</button>
+      </div>
+      <p class="info-text small">Botón central: desplazar cámara • Botón derecho: orbitar • Rueda (Alt/Ctrl): zoom</p>
+    </div>
+
+    <div class="divider"></div>
+
     <div class="panel-section">
       <h3>Forma</h3>
       <div class="shape-grid">
