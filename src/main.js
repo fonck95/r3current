@@ -20,6 +20,7 @@ async function init() {
         editMode: editor.isEditMode(),
         selectedShape: editor.getSelectedShape(),
         selectedRotation: editor.getSelectedRotation(),
+        activeLayer: editor.getActiveLayer(),
       });
     },
   });
@@ -40,6 +41,7 @@ async function init() {
     editMode: editor.isEditMode(),
     selectedShape: editor.getSelectedShape(),
     selectedRotation: editor.getSelectedRotation(),
+    activeLayer: editor.getActiveLayer(),
   });
 
   requestAnimationFrame(loop);
@@ -62,6 +64,7 @@ async function init() {
       editMode: editor.isEditMode(),
       selectedShape: editor.getSelectedShape(),
       selectedRotation: editor.getSelectedRotation(),
+      activeLayer: editor.getActiveLayer(),
     });
   }
 }
