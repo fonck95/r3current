@@ -36,9 +36,11 @@ export class LevelEditor {
     this.draggedBrick = null;
     this.hoverBrick = null;
     this.selectedBrick = null;
+    this.cameraDrag = null;
 
     this.currentLayer = 0;
     this.layerBounds = { min: -20, max: 20 };
+    this.selectedViewMode = 'iso';
 
     this.canvas = this.game.getCanvas();
     this.ui = {
@@ -52,6 +54,7 @@ export class LevelEditor {
       deleteButton: null,
       hint: null,
       paletteContainer: null,
+      viewButtons: [],
     };
 
     this.onPointerDown = this.onPointerDown.bind(this);
@@ -59,12 +62,14 @@ export class LevelEditor {
     this.onPointerUp = this.onPointerUp.bind(this);
     this.onWheel = this.onWheel.bind(this);
     this.onKeyDown = this.onKeyDown.bind(this);
+    this.boundPreventContextMenu = (event) => event.preventDefault();
   }
 
   initialize() {
     this.buildUi();
     this.attachPointerEvents();
     window.addEventListener('keydown', this.onKeyDown);
+    this.setViewMode(this.selectedViewMode, { applyToRuntime: true });
     this.syncEditCamera();
     return this;
   }
@@ -75,6 +80,7 @@ export class LevelEditor {
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
     this.canvas.removeEventListener('pointercancel', this.onPointerUp);
     this.canvas.removeEventListener('wheel', this.onWheel);
+    this.canvas.removeEventListener('contextmenu', this.boundPreventContextMenu);
     window.removeEventListener('keydown', this.onKeyDown);
   }
 
@@ -90,6 +96,7 @@ export class LevelEditor {
     }
 
     this.setupPanelToggle();
+    this.setupViewControls();
     this.setupColorPalette();
     this.setupShapeButtons();
     this.setupRotationControls();
@@ -111,11 +118,58 @@ export class LevelEditor {
     });
   }
 
+  setupViewControls() {
+    const grid = document.getElementById('view-mode-grid');
+    if (!grid) {
+      return;
+    }
+
+    this.ui.viewButtons = Array.from(grid.querySelectorAll('.view-btn'));
+    this.ui.viewButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const mode = button.dataset.view || 'iso';
+        this.setViewMode(mode, { applyToRuntime: true });
+      });
+    });
+
+    this.updateViewButtons(this.selectedViewMode);
+  }
+
   togglePanelVisibility(forceValue) {
     const isCurrentlyVisible = !this.ui.panel?.classList.contains('hidden');
     const next = typeof forceValue === 'boolean' ? forceValue : !isCurrentlyVisible;
     this.panelVisible = next;
     this.ui.panel?.classList.toggle('hidden', !next);
+  }
+
+  setViewMode(mode, { applyToRuntime = false, updateButtons = true } = {}) {
+    if (typeof mode !== 'string' || !mode) {
+      return;
+    }
+
+    this.selectedViewMode = mode;
+    if (applyToRuntime) {
+      this.game.setEditViewMode?.(mode);
+    }
+    if (updateButtons) {
+      this.updateViewButtons(mode);
+    }
+  }
+
+  updateViewButtons(activeMode) {
+    if (!Array.isArray(this.ui.viewButtons)) {
+      return;
+    }
+
+    this.ui.viewButtons.forEach((button) => {
+      const mode = button.dataset.view || '';
+      button.classList.toggle('active', activeMode && mode === activeMode);
+    });
+  }
+
+  markCustomView() {
+    this.selectedViewMode = 'custom';
+    this.updateViewButtons(null);
   }
 
   setupColorPalette() {
@@ -234,6 +288,7 @@ export class LevelEditor {
     this.canvas.addEventListener('pointerup', this.onPointerUp);
     this.canvas.addEventListener('pointercancel', this.onPointerUp);
     this.canvas.addEventListener('wheel', this.onWheel, { passive: false });
+    this.canvas.addEventListener('contextmenu', this.boundPreventContextMenu);
   }
 
   setSelectedColor(color) {
@@ -267,6 +322,7 @@ export class LevelEditor {
       this.updateDeleteButton();
       this.ui.hint?.classList.remove('show');
     } else {
+      this.setViewMode(this.selectedViewMode, { applyToRuntime: true, updateButtons: false });
       this.syncEditCamera();
     }
 
@@ -392,11 +448,51 @@ export class LevelEditor {
   }
 
   onPointerDown(event) {
-    if (!this.editMode || (event.type !== 'pointercancel' && event.button !== 0)) {
+    if (!this.editMode) {
       return;
     }
 
+    const isCameraPan = event.button === 1 || (event.button === 0 && event.altKey);
+    const isCameraOrbit = event.button === 2;
+
+    if (isCameraPan || isCameraOrbit) {
+      event.preventDefault();
+      this.canvas.setPointerCapture(event.pointerId);
+      const pos = this.game.screenToWorld(event.clientX, event.clientY);
+      this.cameraDrag = {
+        pointerId: event.pointerId,
+        type: isCameraOrbit ? 'orbit' : 'pan',
+        lastX: event.clientX,
+        lastY: event.clientY,
+        lastWorld: pos,
+      };
+      this.markCustomView();
+      this.hoverBrick = null;
+      this.updateHoverHint();
+      return;
+    }
+
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    this.canvas.setPointerCapture(event.pointerId);
+
     const pos = this.game.screenToWorld(event.clientX, event.clientY);
+    if (!pos) {
+      if (typeof this.canvas.releasePointerCapture === 'function') {
+        const hasCapture =
+          typeof this.canvas.hasPointerCapture === 'function'
+            ? this.canvas.hasPointerCapture(event.pointerId)
+            : true;
+        if (hasCapture) {
+          this.canvas.releasePointerCapture(event.pointerId);
+        }
+      }
+      return;
+    }
+
     const clickedBrick = this.findBrickAtPoint(pos.x, pos.y);
 
     if (clickedBrick) {
@@ -452,7 +548,42 @@ export class LevelEditor {
       return;
     }
 
+    if (this.cameraDrag && event.pointerId === this.cameraDrag.pointerId) {
+      if (this.cameraDrag.type === 'orbit') {
+        const deltaX = event.clientX - this.cameraDrag.lastX;
+        const deltaY = event.clientY - this.cameraDrag.lastY;
+        if (deltaX || deltaY) {
+          this.game.orbitEditCamera?.(deltaX, deltaY);
+          this.cameraDrag.lastX = event.clientX;
+          this.cameraDrag.lastY = event.clientY;
+        }
+      } else if (this.cameraDrag.type === 'pan') {
+        const pos = this.game.screenToWorld(event.clientX, event.clientY);
+        if (pos && this.cameraDrag.lastWorld) {
+          const deltaX = this.cameraDrag.lastWorld.x - pos.x;
+          const deltaY = this.cameraDrag.lastWorld.y - pos.y;
+          if (Math.abs(deltaX) > 1e-4 || Math.abs(deltaY) > 1e-4) {
+            this.game.panEditCamera?.(deltaX, deltaY);
+            const updated = this.game.screenToWorld(event.clientX, event.clientY);
+            if (updated) {
+              this.cameraDrag.lastWorld = updated;
+            }
+          }
+        } else {
+          this.cameraDrag.lastWorld = pos;
+        }
+      }
+      event.preventDefault();
+      return;
+    }
+
     const pos = this.game.screenToWorld(event.clientX, event.clientY);
+    if (!pos) {
+      this.hoverBrick = null;
+      this.updateHoverHint();
+      return;
+    }
+
     this.hoverBrick = this.findBrickAtPoint(pos.x, pos.y);
     this.updateHoverHint();
 
@@ -491,8 +622,37 @@ export class LevelEditor {
   }
 
   onPointerUp(event) {
-    if (!this.editMode || (event.type !== 'pointercancel' && event.button !== 0)) {
+    if (!this.editMode) {
       return;
+    }
+
+    if (this.cameraDrag && event.pointerId === this.cameraDrag.pointerId) {
+      if (typeof this.canvas.releasePointerCapture === 'function') {
+        const hasCapture =
+          typeof this.canvas.hasPointerCapture === 'function'
+            ? this.canvas.hasPointerCapture(event.pointerId)
+            : true;
+        if (hasCapture) {
+          this.canvas.releasePointerCapture(event.pointerId);
+        }
+      }
+      this.cameraDrag = null;
+      return;
+    }
+
+    const isCancel = event.type === 'pointercancel';
+    if (!isCancel && event.button !== 0) {
+      return;
+    }
+
+    if (typeof this.canvas.releasePointerCapture === 'function') {
+      const hasCapture =
+        typeof this.canvas.hasPointerCapture === 'function'
+          ? this.canvas.hasPointerCapture(event.pointerId)
+          : true;
+      if (hasCapture) {
+        this.canvas.releasePointerCapture(event.pointerId);
+      }
     }
 
     if (this.draggedBrick) {
