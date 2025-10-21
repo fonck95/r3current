@@ -1,6 +1,6 @@
 # r3current
 
-Experimento WebGPU/Canvas 2D que combina un runtime jugable con un editor visual para crear entornos basados en "bricks". El proyecto está escrito en JavaScript moderno y puede ejecutarse directamente en el navegador sin pasos de compilación.
+Experimento Babylon.js 2D que combina un runtime jugable con un editor visual para crear entornos basados en "bricks". El proyecto está escrito en JavaScript moderno y puede ejecutarse directamente en el navegador sin pasos de compilación.
 
 ## Estructura del proyecto
 
@@ -15,7 +15,8 @@ Experimento WebGPU/Canvas 2D que combina un runtime jugable con un editor visual
     │   ├── character.js  # Clase base para entidades físicas animadas
     │   ├── physics.js    # Motor de física, colisiones y utilidades de bricks
     │   ├── player.js     # Lógica específica del jugador jugable
-    │   └── runtime.js    # Render, bucle principal y persistencia del mundo
+    │   ├── babylonRenderer.js # Adaptador de renderizado sobre Babylon.js
+    │   └── runtime.js    # Bucle principal, integración con Babylon y persistencia del mundo
     └── engine/
         └── editor.js     # Motor de edición: UI, gestos y persistencia de niveles
 ```
@@ -25,7 +26,7 @@ La carpeta `game/` agrupa todo lo relacionado con la experiencia jugable (físic
 ## Requisitos
 
 * Navegador moderno con soporte para módulos ES6.
-* WebGPU es opcional; si no está disponible, el motor utiliza automáticamente Canvas 2D.
+* Babylon.js se incluye mediante CDN, por lo que basta con conexión inicial para cargar la librería.
 
 ## Uso
 
