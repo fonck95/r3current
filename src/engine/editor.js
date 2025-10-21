@@ -33,17 +33,25 @@ export class LevelEditor {
     this.selectedBrick = null;
     this.panelVisible = false;
 
+    this.currentLayer = 0;
+    this.layerBounds = { min: -20, max: 20 };
+    this.depthSlider = null;
+    this.depthValueLabel = null;
+
     this.canvas = this.game.getCanvas();
 
     this.onPointerDown = this.onPointerDown.bind(this);
     this.onPointerMove = this.onPointerMove.bind(this);
     this.onPointerUp = this.onPointerUp.bind(this);
     this.onWheel = this.onWheel.bind(this);
+    this.onKeyDown = this.onKeyDown.bind(this);
   }
 
   initialize() {
     this.setupUI();
     this.attachPointerEvents();
+    window.addEventListener('keydown', this.onKeyDown);
+    this.syncEditCamera();
   }
 
   attachPointerEvents() {
@@ -60,6 +68,7 @@ export class LevelEditor {
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
     this.canvas.removeEventListener('pointercancel', this.onPointerUp);
     this.canvas.removeEventListener('wheel', this.onWheel);
+    window.removeEventListener('keydown', this.onKeyDown);
   }
 
   setupUI() {
@@ -118,6 +127,39 @@ export class LevelEditor {
       });
     });
 
+    this.depthSlider = document.getElementById('depth-slider');
+    this.depthValueLabel = document.getElementById('depth-value');
+    const applyDepthButton = document.getElementById('apply-depth');
+
+    if (this.depthSlider) {
+      this.depthSlider.min = `${this.layerBounds.min}`;
+      this.depthSlider.max = `${this.layerBounds.max}`;
+      this.depthSlider.value = `${this.currentLayer}`;
+      this.depthSlider.addEventListener('input', (event) => {
+        const next = Number.parseInt(event.target.value, 10);
+        this.setActiveLayer(Number.isNaN(next) ? 0 : next, { fromSlider: true });
+      });
+    }
+
+    document.querySelectorAll('.depth-step').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        const direction = Number.parseInt(btn.dataset.direction || '0', 10);
+        if (!direction) {
+          return;
+        }
+        const step = event.shiftKey ? 5 : 1;
+        this.shiftActiveLayer(direction * step);
+      });
+    });
+
+    if (applyDepthButton) {
+      applyDepthButton.addEventListener('click', () => {
+        this.applyDepthToSelection();
+      });
+    }
+
+    this.updateDepthUI();
+
     const toggleButton = document.getElementById('toggle-edit');
     toggleButton?.addEventListener('click', () => {
       this.toggleEditMode();
@@ -174,6 +216,8 @@ export class LevelEditor {
       this.updateDeleteButton();
       const hint = document.getElementById('delete-hint');
       hint?.classList.remove('show');
+    } else {
+      this.syncEditCamera();
     }
 
     if (typeof this.options.onModeChange === 'function') {
@@ -204,6 +248,94 @@ export class LevelEditor {
     return this.selectedShape;
   }
 
+  getActiveLayer() {
+    return this.currentLayer;
+  }
+
+  setActiveLayer(value, options = {}) {
+    const rounded = Math.round(Number.isFinite(value) ? value : 0);
+
+    if (rounded < this.layerBounds.min) {
+      this.layerBounds.min = rounded;
+    }
+    if (rounded > this.layerBounds.max) {
+      this.layerBounds.max = rounded;
+    }
+
+    const changed = rounded !== this.currentLayer;
+    if (changed) {
+      this.currentLayer = rounded;
+    }
+
+    if (this.ghostBrick) {
+      this.ghostBrick.z = this.currentLayer;
+    }
+
+    this.updateDepthUI({ fromSlider: options.fromSlider });
+
+    if (changed || options.forceCamera || options.fromSelection) {
+      this.syncEditCamera();
+    }
+
+    return this.currentLayer;
+  }
+
+  shiftActiveLayer(delta) {
+    if (!delta) return this.currentLayer;
+    return this.setActiveLayer(this.currentLayer + delta);
+  }
+
+  updateDepthUI({ fromSlider = false } = {}) {
+    if (this.depthSlider) {
+      this.depthSlider.min = `${this.layerBounds.min}`;
+      this.depthSlider.max = `${this.layerBounds.max}`;
+      if (!fromSlider) {
+        this.depthSlider.value = `${this.currentLayer}`;
+      }
+    }
+    if (this.depthValueLabel) {
+      this.depthValueLabel.textContent = `${this.currentLayer}`;
+    }
+  }
+
+  applyDepthToSelection() {
+    if (!this.selectedBrick) {
+      return;
+    }
+    if (typeof this.selectedBrick.z !== 'number') {
+      this.selectedBrick.z = 0;
+    }
+    if (this.selectedBrick.z === this.currentLayer) {
+      return;
+    }
+    this.selectedBrick.z = this.currentLayer;
+    this.saveBricks();
+  }
+
+  syncEditCamera() {
+    if (typeof this.game.setEditPlaneDepth === 'function') {
+      this.game.setEditPlaneDepth(this.currentLayer);
+    }
+  }
+
+  onKeyDown(event) {
+    if (!this.editMode) {
+      return;
+    }
+
+    const step = event.shiftKey ? 5 : 1;
+    if (event.code === 'BracketLeft' || event.code === 'PageDown') {
+      event.preventDefault();
+      this.shiftActiveLayer(-step);
+    } else if (event.code === 'BracketRight' || event.code === 'PageUp') {
+      event.preventDefault();
+      this.shiftActiveLayer(step);
+    } else if (event.code === 'KeyF' && this.selectedBrick) {
+      event.preventDefault();
+      this.setActiveLayer(this.selectedBrick.z ?? 0, { fromSelection: true });
+    }
+  }
+
   onPointerDown(event) {
     if (!this.editMode) {
       return;
@@ -214,6 +346,10 @@ export class LevelEditor {
     const clickedBrick = this.findBrickAtPoint(pos.x, pos.y);
 
     if (clickedBrick) {
+      if (typeof clickedBrick.z !== 'number') {
+        clickedBrick.z = 0;
+      }
+      this.setActiveLayer(clickedBrick.z ?? 0, { fromSelection: true });
       if (event.shiftKey) {
         clickedBrick.color = [...this.selectedColor];
         this.saveBricks();
@@ -249,6 +385,7 @@ export class LevelEditor {
         shape: this.selectedShape,
         color: this.selectedColor,
         rotation: (this.selectedRotation * Math.PI) / 180,
+        z: this.currentLayer,
       };
     }
   }
@@ -287,6 +424,7 @@ export class LevelEditor {
         shape: this.selectedShape,
         color: this.selectedColor,
         rotation: (this.selectedRotation * Math.PI) / 180,
+        z: this.currentLayer,
       };
     }
   }
@@ -309,6 +447,7 @@ export class LevelEditor {
           shape: this.selectedShape,
           color: [...this.selectedColor],
           rotation: (this.selectedRotation * Math.PI) / 180,
+          z: this.ghostBrick.z ?? this.currentLayer,
         });
         this.saveBricks();
       }
@@ -342,12 +481,32 @@ export class LevelEditor {
 
   findBrickAtPoint(x, y) {
     const world = this.game.getWorld();
-    for (let i = world.bricks.length - 1; i >= 0; i -= 1) {
-      if (pointInBrick(world.bricks[i], x, y)) {
-        return world.bricks[i];
+    const matches = [];
+
+    for (let i = 0; i < world.bricks.length; i += 1) {
+      const candidate = world.bricks[i];
+      if (typeof candidate.z !== 'number') {
+        candidate.z = 0;
+      }
+      if (pointInBrick(candidate, x, y)) {
+        matches.push(candidate);
       }
     }
-    return null;
+
+    if (!matches.length) {
+      return null;
+    }
+
+    matches.sort((a, b) => {
+      const depthA = Math.abs((a.z ?? 0) - this.currentLayer);
+      const depthB = Math.abs((b.z ?? 0) - this.currentLayer);
+      if (depthA === depthB) {
+        return (b.z ?? 0) - (a.z ?? 0);
+      }
+      return depthA - depthB;
+    });
+
+    return matches[0];
   }
 
   updateDeleteButton() {
@@ -381,6 +540,7 @@ export class LevelEditor {
         shape: this.ghostBrick.shape,
         color: [...this.ghostBrick.color.slice(0, 3), 0.4],
         rotation: this.ghostBrick.rotation,
+        depthIndex: (this.ghostBrick.z ?? this.currentLayer) - 0.25,
       });
     }
 
@@ -393,6 +553,7 @@ export class LevelEditor {
         shape: 'rect',
         color: [1, 1, 1, 0.3],
         rotation: this.hoverBrick.rotation,
+        depthIndex: (this.hoverBrick.z ?? this.currentLayer) - 0.5,
       });
     }
 
@@ -405,6 +566,7 @@ export class LevelEditor {
         shape: 'rect',
         color: [0.3, 0.8, 1.0, 0.6],
         rotation: 0,
+        depthIndex: (this.selectedBrick.z ?? this.currentLayer) - 0.75,
       });
     }
 

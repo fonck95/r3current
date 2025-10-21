@@ -23,6 +23,7 @@ export class GameRuntime {
     this.drawables = [];
     this.accumulator = 0;
     this.isEditMode = false;
+    this.activeEditLayer = 0;
 
     this.renderer = new BabylonRenderer(canvas, {
       virtualWidth: VIRTUAL_WIDTH,
@@ -80,10 +81,17 @@ export class GameRuntime {
   buildDrawables(overlays = []) {
     const drawables = [];
     const editMode = this.isEditMode;
+    const maxBrickLayer = this.world.bricks.reduce(
+      (max, brick) => Math.max(max, brick.z ?? 0),
+      0,
+    );
 
     const brickSet = new Set(this.world.bricks);
 
     this.world.bricks.forEach((body, brickIndex) => {
+      if (typeof body.z !== 'number') {
+        body.z = 0;
+      }
       drawables.push({
         id: body.id || `brick_${brickIndex}`,
         x: body.x,
@@ -94,7 +102,7 @@ export class GameRuntime {
         color: body.color || [0.8, 0.4, 0.2, 1.0],
         rotation: body.rotation || 0,
         layer: 'world',
-        depthIndex: editMode ? brickIndex : 0,
+        depthIndex: editMode ? body.z ?? 0 : 0,
       });
     });
 
@@ -111,7 +119,7 @@ export class GameRuntime {
         color: body.color || [0.8, 0.4, 0.2, 1.0],
         rotation: body.rotation || 0,
         layer: 'world',
-        depthIndex: editMode ? this.world.bricks.length : 0,
+        depthIndex: editMode ? (body.z ?? maxBrickLayer + 1) : 0,
       });
     });
 
@@ -133,7 +141,7 @@ export class GameRuntime {
       color: [0.3, 0.3, 0.3, 1.0],
       rotation: 0,
       layer: 'world',
-      depthIndex: editMode ? this.world.bricks.length + 1 : 0,
+      depthIndex: editMode ? maxBrickLayer + 2 : 0,
     });
 
     overlays.forEach((overlay, index) => {
@@ -179,15 +187,17 @@ export class GameRuntime {
     return { x, y };
   }
 
-  composeHud({ dt, editMode, selectedShape, selectedRotation }) {
+  composeHud({ dt, editMode, selectedShape, selectedRotation, activeLayer }) {
     const fps = dt > 0 ? (1 / dt).toFixed(0) : '0';
     const mode = editMode ? 'EDICIÓN' : 'JUEGO';
     const renderer = 'Babylon.js';
     const rotInfo = editMode ? ` | Rotación: ${selectedRotation.toFixed(0)}°` : '';
     const animState = !editMode ? ` | Anim: ${this.player.animationController.currentState}` : '';
     const bricks = this.world.bricks.length;
+    const layerDisplay = Number.isFinite(activeLayer) ? Math.round(activeLayer) : this.activeEditLayer;
+    const layerInfo = editMode ? ` | Capa: ${layerDisplay}` : '';
 
-    const statusLine = `${renderer} | FPS: ${fps} | Modo: ${mode}${animState}${rotInfo}`;
+    const statusLine = `${renderer} | FPS: ${fps} | Modo: ${mode}${animState}${rotInfo}${layerInfo}`;
     const helpLine = editMode
       ? `Forma: ${selectedShape} | Bricks: ${bricks}`
       : `A/D: Mover | Space: Saltar | Bricks: ${bricks}`;
@@ -218,8 +228,19 @@ export class GameRuntime {
   setEditMode(value) {
     this.isEditMode = Boolean(value);
     this.renderer.setMode(this.isEditMode ? 'edit' : 'play');
+    if (this.isEditMode) {
+      this.setEditPlaneDepth(this.activeEditLayer);
+    }
     if (this.drawables.length) {
       this.renderer.syncDrawables(this.drawables);
+    }
+  }
+
+  setEditPlaneDepth(layerIndex) {
+    const nextLayer = Number.isFinite(layerIndex) ? Math.round(layerIndex) : 0;
+    this.activeEditLayer = nextLayer;
+    if (typeof this.renderer.setEditPlane === 'function') {
+      this.renderer.setEditPlane(nextLayer);
     }
   }
 }

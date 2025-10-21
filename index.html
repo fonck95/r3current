@@ -229,12 +229,39 @@
       flex-direction: column;
       gap: 10px;
     }
+    .depth-control {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .depth-control button {
+      padding: 8px 12px;
+      min-width: 0;
+    }
+    .depth-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .depth-meta strong {
+      color: #4a90e2;
+    }
+    .depth-meta button {
+      padding: 8px 12px;
+      font-size: 12px;
+    }
+    .info-text.small {
+      font-size: 11px;
+      opacity: 0.8;
+    }
     .rotation-slider-container {
       display: flex;
       align-items: center;
       gap: 12px;
     }
-    #rotation-slider {
+    #rotation-slider,
+    #depth-slider {
       flex: 1;
       height: 6px;
       border-radius: 3px;
@@ -242,7 +269,8 @@
       outline: none;
       -webkit-appearance: none;
     }
-    #rotation-slider::-webkit-slider-thumb {
+    #rotation-slider::-webkit-slider-thumb,
+    #depth-slider::-webkit-slider-thumb {
       -webkit-appearance: none;
       width: 18px;
       height: 18px;
@@ -251,7 +279,8 @@
       cursor: pointer;
       box-shadow: 0 0 10px rgba(74, 144, 226, 0.5);
     }
-    #rotation-slider::-moz-range-thumb {
+    #rotation-slider::-moz-range-thumb,
+    #depth-slider::-moz-range-thumb {
       width: 18px;
       height: 18px;
       border-radius: 50%;
@@ -375,6 +404,20 @@
           <button class="rotation-preset" data-angle="135">135°</button>
         </div>
       </div>
+    </div>
+
+    <div class="panel-section">
+      <h3>Profundidad</h3>
+      <div class="depth-control">
+        <button class="depth-step" data-direction="-1">-</button>
+        <input type="range" id="depth-slider" min="-20" max="20" value="0" step="1">
+        <button class="depth-step" data-direction="1">+</button>
+      </div>
+      <div class="depth-meta">
+        <span>Capa activa: <strong id="depth-value">0</strong></span>
+        <button id="apply-depth" title="Mover figura seleccionada a la capa activa">Aplicar al seleccionado</button>
+      </div>
+      <p class="info-text small">Usa '[' y ']' para cambiar la capa • Mayús + '[' o ']' salta 5 capas • Pulsa F para enfocar la figura seleccionada en la capa activa</p>
     </div>
 
     <div class="divider"></div>

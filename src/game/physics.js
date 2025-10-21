@@ -21,7 +21,8 @@ export function brick(world, x, y, w, h, opts = {}) {
     isStatic: true,
     onGround: false,
     shape: opts.shape || 'rect',
-    color: opts.color || [0.8, 0.4, 0.2, 1.0]
+    color: opts.color || [0.8, 0.4, 0.2, 1.0],
+    z: Number.isFinite(opts.z) ? Math.round(opts.z) : 0
   };
   world.bodies.push(body);
   world.bricks.push(body);
@@ -451,14 +452,15 @@ export function pointInBrick(brick, px, py) {
 }
 
 export function serializeBricks(world) {
-  return world.bricks.map(b => ({ 
-    x: b.x, 
-    y: b.y, 
-    w: b.w, 
+  return world.bricks.map(b => ({
+    x: b.x,
+    y: b.y,
+    w: b.w,
     h: b.h,
     shape: b.shape,
     color: b.color,
-    rotation: b.rotation
+    rotation: b.rotation,
+    z: typeof b.z === 'number' ? b.z : 0
   }));
 }
 
@@ -470,7 +472,8 @@ export function loadBricks(world, data) {
       brick(world, item.x, item.y, item.w, item.h, {
         shape: item.shape || 'rect',
         color: item.color || [0.8, 0.4, 0.2, 1.0],
-        rotation: item.rotation || 0
+        rotation: item.rotation || 0,
+        z: Number.isFinite(item.z) ? Math.round(item.z) : 0
       });
     }
   });
