@@ -341,6 +341,10 @@ export class LevelEditor {
       return;
     }
 
+    if (event.type !== 'pointercancel' && event.button !== 0) {
+      return;
+    }
+
     const pos = this.game.screenToWorld(event.clientX, event.clientY);
     const world = this.game.getWorld();
     const clickedBrick = this.findBrickAtPoint(pos.x, pos.y);
@@ -401,7 +405,7 @@ export class LevelEditor {
     const hint = document.getElementById('delete-hint');
     if (hint) {
       if (this.hoverBrick) {
-        hint.textContent = 'Click: Eliminar | Shift+Click: Color | Ctrl+Click: Copiar rotación | Rueda: Rotar';
+        hint.textContent = 'Click: Eliminar | Shift+Click: Color | Ctrl+Click: Copiar rotación | Rueda: Rotar | Alt/Ctrl+Rueda: Zoom';
         hint.classList.add('show');
       } else {
         hint.classList.remove('show');
@@ -434,6 +438,10 @@ export class LevelEditor {
       return;
     }
 
+    if (event.type !== 'pointercancel' && event.button !== 0) {
+      return;
+    }
+
     const pos = this.game.screenToWorld(event.clientX, event.clientY);
     const world = this.game.getWorld();
 
@@ -462,7 +470,18 @@ export class LevelEditor {
       return;
     }
 
-    if (!(this.draggedBrick || this.hoverBrick)) {
+    const hasRotationTarget = Boolean(this.draggedBrick || this.hoverBrick);
+    const useCameraZoom = event.altKey || event.ctrlKey || !hasRotationTarget;
+
+    if (useCameraZoom) {
+      event.preventDefault();
+      if (typeof this.game.adjustEditCameraDistance === 'function') {
+        this.game.adjustEditCameraDistance(event.deltaY);
+      }
+      return;
+    }
+
+    if (!hasRotationTarget) {
       return;
     }
 
