@@ -1,14 +1,8 @@
-function createTrianglePoints(BABYLON) {
-  return [
-    new BABYLON.Vector3(-0.5, -0.5, 0),
-    new BABYLON.Vector3(0.5, -0.5, 0),
-    new BABYLON.Vector3(0, 0.5, 0),
-  ];
-}
-
 function colorKey(color) {
   return color.map((c) => c.toFixed(4)).join('_');
 }
+
+const EDIT_DEPTH_STEP = 40;
 
 export class BabylonRenderer {
   constructor(canvas, { virtualWidth, virtualHeight } = {}) {
@@ -28,6 +22,10 @@ export class BabylonRenderer {
     this.canvasHeight = canvas.height;
     this.scaleX = 1;
     this.scaleY = 1;
+    this.mode = 'play';
+    this.editBackground = null;
+    this.editBackgroundTexture = null;
+    this.editTargetZ = 0;
   }
 
   initialize() {
@@ -46,9 +44,11 @@ export class BabylonRenderer {
     this.camera.setTarget(BABYLON.Vector3.Zero());
     this.camera.mode = BABYLON.Camera.ORTHOGRAPHIC_CAMERA;
     this.camera.minZ = 0.1;
-    this.camera.maxZ = 4000;
+    this.camera.maxZ = 8000;
 
     this.updateViewport();
+    this.createEditBackground();
+    this.setMode('play');
 
     this.engine.runRenderLoop(() => {
       if (this.scene) {
@@ -71,6 +71,10 @@ export class BabylonRenderer {
     this.engine = null;
     this.scene = null;
     this.camera = null;
+    this.editBackground = null;
+    this.editBackgroundTexture = null;
+    this.mode = 'play';
+    this.editTargetZ = 0;
   }
 
   updateViewport() {
@@ -89,6 +93,8 @@ export class BabylonRenderer {
     this.camera.orthoRight = halfW;
     this.camera.orthoBottom = -halfH;
     this.camera.orthoTop = halfH;
+
+    this.updateEditBackground();
   }
 
   resize() {
@@ -102,6 +108,8 @@ export class BabylonRenderer {
 
     const used = new Set();
 
+    let maxDepthIndex = 0;
+
     drawables.forEach((drawable, index) => {
       const key = drawable.id || `anon_${index}`;
       let mesh = this.meshPool.get(key);
@@ -114,6 +122,10 @@ export class BabylonRenderer {
 
       this.applyDrawable(mesh, drawable);
       used.add(key);
+
+      if (typeof drawable.depthIndex === 'number') {
+        maxDepthIndex = Math.max(maxDepthIndex, drawable.depthIndex);
+      }
     });
 
     this.meshPool.forEach((mesh, key) => {
@@ -122,6 +134,16 @@ export class BabylonRenderer {
         this.meshPool.delete(key);
       }
     });
+
+    if (this.editBackground) {
+      const depth = Math.max(200, (maxDepthIndex + 4) * EDIT_DEPTH_STEP);
+      this.editBackground.position.z = depth;
+    }
+
+    this.editTargetZ = Math.max(0, maxDepthIndex * EDIT_DEPTH_STEP * 0.5);
+    if (this.mode === 'edit' && this.camera) {
+      this.camera.setTarget(new BABYLON.Vector3(0, 0, this.editTargetZ));
+    }
   }
 
   render() {
@@ -141,8 +163,9 @@ export class BabylonRenderer {
         }, this.scene);
         break;
       case 'triangle':
-        mesh = BABYLON.MeshBuilder.CreatePolygon(name, {
-          shape: createTrianglePoints(BABYLON),
+        mesh = BABYLON.MeshBuilder.CreateDisc(name, {
+          radius: 0.5,
+          tessellation: 3,
           sideOrientation: BABYLON.Mesh.DOUBLESIDE,
         }, this.scene);
         break;
@@ -155,7 +178,8 @@ export class BabylonRenderer {
         break;
     }
 
-    mesh.metadata = { shape: drawable.shape };
+    const baseRotation = drawable.shape === 'triangle' ? Math.PI / 2 : 0;
+    mesh.metadata = { shape: drawable.shape, baseRotation };
     mesh.alwaysSelectAsActiveMesh = true;
     mesh.material = this.getMaterial(drawable.color || [1, 1, 1, 1]);
     mesh.billboardMode = BABYLON.AbstractMesh.BILLBOARDMODE_NONE;
@@ -180,9 +204,15 @@ export class BabylonRenderer {
 
     mesh.position.x = sceneX;
     mesh.position.y = sceneY;
-    mesh.position.z = drawable.layer === 'overlay' ? 50 : 0;
+    if (this.mode === 'edit') {
+      const depthIndex = drawable.depthIndex ?? 0;
+      mesh.position.z = drawable.layer === 'overlay' ? -EDIT_DEPTH_STEP : depthIndex * EDIT_DEPTH_STEP;
+    } else {
+      mesh.position.z = drawable.layer === 'overlay' ? 50 : 0;
+    }
 
-    mesh.rotation.z = -(drawable.rotation || 0);
+    const baseRotation = mesh.metadata?.baseRotation || 0;
+    mesh.rotation.z = baseRotation - (drawable.rotation || 0);
 
     mesh.scaling.x = Math.max(0.0001, drawable.w * this.scaleX);
     mesh.scaling.y = Math.max(0.0001, drawable.h * this.scaleY);
@@ -208,5 +238,93 @@ export class BabylonRenderer {
     }
 
     return this.materials.get(key);
+  }
+
+  createEditBackground() {
+    const { BABYLON } = window;
+    if (!this.scene) return;
+
+    this.editBackgroundTexture = new BABYLON.DynamicTexture('edit_bg_tex', { width: 1024, height: 1024 }, this.scene, true);
+    const ctx = this.editBackgroundTexture.getContext();
+    ctx.fillStyle = '#12121e';
+    ctx.fillRect(0, 0, 1024, 1024);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.lineWidth = 1;
+    const divisions = 16;
+    for (let i = 0; i <= divisions; i += 1) {
+      const pos = (1024 / divisions) * i;
+      ctx.beginPath();
+      ctx.moveTo(pos, 0);
+      ctx.lineTo(pos, 1024);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, pos);
+      ctx.lineTo(1024, pos);
+      ctx.stroke();
+    }
+    this.editBackgroundTexture.update();
+
+    const material = new BABYLON.StandardMaterial('edit_bg_mat', this.scene);
+    material.diffuseTexture = this.editBackgroundTexture;
+    material.emissiveTexture = this.editBackgroundTexture;
+    material.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.28);
+    material.emissiveColor = new BABYLON.Color3(0.2, 0.2, 0.28);
+    material.specularColor = new BABYLON.Color3(0, 0, 0);
+    material.backFaceCulling = false;
+    material.disableLighting = true;
+
+    this.editBackground = BABYLON.MeshBuilder.CreatePlane('edit_bg', {
+      size: 1,
+      sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+    }, this.scene);
+    this.editBackground.isPickable = false;
+    this.editBackground.renderingGroupId = 0;
+    this.editBackground.material = material;
+    this.editBackground.isVisible = false;
+    this.updateEditBackground();
+  }
+
+  updateEditBackground() {
+    if (!this.editBackground) return;
+    this.editBackground.scaling.x = this.canvasWidth * 1.2;
+    this.editBackground.scaling.y = this.canvasHeight * 1.2;
+    this.editBackground.position.x = 0;
+    this.editBackground.position.y = 0;
+  }
+
+  setMode(mode) {
+    if (!this.camera || this.mode === mode) {
+      this.mode = mode;
+      if (this.editBackground) {
+        this.editBackground.isVisible = mode === 'edit';
+      }
+      return;
+    }
+
+    const { BABYLON } = window;
+    this.mode = mode;
+
+    if (mode === 'edit') {
+      const distance = Math.max(this.canvasWidth, this.canvasHeight) * 1.1;
+      this.camera.mode = BABYLON.Camera.PERSPECTIVE_CAMERA;
+      this.camera.position = new BABYLON.Vector3(-distance * 0.35, distance * 0.15, -distance);
+      this.camera.setTarget(new BABYLON.Vector3(0, 0, this.editTargetZ));
+      this.camera.fov = BABYLON.Tools.ToRadians(45);
+      this.camera.minZ = 0.1;
+      this.camera.maxZ = 8000;
+      if (this.editBackground) {
+        this.editBackground.isVisible = true;
+      }
+    } else {
+      this.camera.mode = BABYLON.Camera.ORTHOGRAPHIC_CAMERA;
+      this.camera.position = new BABYLON.Vector3(0, 0, -1000);
+      this.camera.setTarget(BABYLON.Vector3.Zero());
+      this.camera.minZ = 0.1;
+      this.camera.maxZ = 8000;
+      this.updateViewport();
+      if (this.editBackground) {
+        this.editBackground.isVisible = false;
+      }
+    }
   }
 }

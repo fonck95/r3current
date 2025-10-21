@@ -22,6 +22,7 @@ export class GameRuntime {
     this.keys = {};
     this.drawables = [];
     this.accumulator = 0;
+    this.isEditMode = false;
 
     this.renderer = new BabylonRenderer(canvas, {
       virtualWidth: VIRTUAL_WIDTH,
@@ -78,9 +79,28 @@ export class GameRuntime {
 
   buildDrawables(overlays = []) {
     const drawables = [];
+    const editMode = this.isEditMode;
+
+    const brickSet = new Set(this.world.bricks);
+
+    this.world.bricks.forEach((body, brickIndex) => {
+      drawables.push({
+        id: body.id || `brick_${brickIndex}`,
+        x: body.x,
+        y: body.y,
+        w: body.w,
+        h: body.h,
+        shape: body.shape || 'rect',
+        color: body.color || [0.8, 0.4, 0.2, 1.0],
+        rotation: body.rotation || 0,
+        layer: 'world',
+        depthIndex: editMode ? brickIndex : 0,
+      });
+    });
 
     this.world.bodies.forEach((body) => {
       if (body === this.player) return;
+      if (brickSet.has(body)) return;
       drawables.push({
         id: body.id || `body_${drawables.length}`,
         x: body.x,
@@ -91,6 +111,7 @@ export class GameRuntime {
         color: body.color || [0.8, 0.4, 0.2, 1.0],
         rotation: body.rotation || 0,
         layer: 'world',
+        depthIndex: editMode ? this.world.bricks.length : 0,
       });
     });
 
@@ -98,6 +119,7 @@ export class GameRuntime {
       ...item,
       id: `player_${index}`,
       layer: 'world',
+      depthIndex: editMode ? -1 : 0,
     }));
     drawables.push(...playerDrawables);
 
@@ -111,6 +133,7 @@ export class GameRuntime {
       color: [0.3, 0.3, 0.3, 1.0],
       rotation: 0,
       layer: 'world',
+      depthIndex: editMode ? this.world.bricks.length + 1 : 0,
     });
 
     overlays.forEach((overlay, index) => {
@@ -118,6 +141,7 @@ export class GameRuntime {
         ...overlay,
         id: overlay.id || `overlay_${index}`,
         layer: 'overlay',
+        depthIndex: overlay.depthIndex ?? (editMode ? -5 : 0),
       });
     });
 
@@ -188,6 +212,14 @@ export class GameRuntime {
       localStorage.setItem('bricks', JSON.stringify(serializeBricks(this.world)));
     } catch (e) {
       console.error('Failed to save bricks:', e);
+    }
+  }
+
+  setEditMode(value) {
+    this.isEditMode = Boolean(value);
+    this.renderer.setMode(this.isEditMode ? 'edit' : 'play');
+    if (this.drawables.length) {
+      this.renderer.syncDrawables(this.drawables);
     }
   }
 }
