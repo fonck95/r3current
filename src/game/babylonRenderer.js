@@ -31,6 +31,18 @@ export class BabylonRenderer {
     this.lastDepthIndex = 0;
   }
 
+  getDefaultEditCameraDistance() {
+    return Math.max(this.canvasWidth, this.canvasHeight) * 1.1;
+  }
+
+  getMinEditCameraDistance() {
+    return Math.max(200, Math.min(this.canvasWidth, this.canvasHeight) * 0.35);
+  }
+
+  getMaxEditCameraDistance() {
+    return Math.max(this.canvasWidth, this.canvasHeight) * 8;
+  }
+
   initialize() {
     const { BABYLON } = window;
 
@@ -107,7 +119,12 @@ export class BabylonRenderer {
     if (!this.engine) return;
     this.updateViewport();
     if (this.mode === 'edit') {
-      this.editCameraDistance = Math.max(this.canvasWidth, this.canvasHeight) * 1.1;
+      if (!this.editCameraDistance) {
+        this.editCameraDistance = this.getDefaultEditCameraDistance();
+      }
+      const minDistance = this.getMinEditCameraDistance();
+      const maxDistance = this.getMaxEditCameraDistance();
+      this.editCameraDistance = Math.min(Math.max(this.editCameraDistance, minDistance), maxDistance);
       this.updateEditCamera();
     }
     this.engine.resize();
@@ -191,10 +208,12 @@ export class BabylonRenderer {
   updateEditCamera() {
     if (!this.camera) return;
     const { BABYLON } = window;
-    const distance = this.editCameraDistance || Math.max(this.canvasWidth, this.canvasHeight) * 1.1;
-    if (!this.editCameraDistance) {
-      this.editCameraDistance = distance;
-    }
+    const defaultDistance = this.getDefaultEditCameraDistance();
+    const minDistance = this.getMinEditCameraDistance();
+    const maxDistance = this.getMaxEditCameraDistance();
+    const nextDistance = this.editCameraDistance || defaultDistance;
+    const distance = Math.min(Math.max(nextDistance, minDistance), maxDistance);
+    this.editCameraDistance = distance;
     const target = new BABYLON.Vector3(0, 0, this.editTargetZ);
     const offset = new BABYLON.Vector3(-distance * 0.35, distance * 0.15, -distance);
     this.camera.setTarget(target);
@@ -263,7 +282,7 @@ export class BabylonRenderer {
     }
 
     const baseRotation = mesh.metadata?.baseRotation || 0;
-    mesh.rotation.z = baseRotation - (drawable.rotation || 0);
+    mesh.rotation.z = baseRotation + (drawable.rotation || 0);
 
     mesh.scaling.x = Math.max(0.0001, drawable.w * this.scaleX);
     mesh.scaling.y = Math.max(0.0001, drawable.h * this.scaleY);
@@ -355,7 +374,9 @@ export class BabylonRenderer {
         this.editBackground.isVisible = mode === 'edit';
       }
       if (mode === 'edit') {
-        this.editCameraDistance = Math.max(this.canvasWidth, this.canvasHeight) * 1.1;
+        if (!this.editCameraDistance) {
+          this.editCameraDistance = this.getDefaultEditCameraDistance();
+        }
         this.updateEditCamera();
       }
       return;
@@ -366,7 +387,7 @@ export class BabylonRenderer {
 
     if (mode === 'edit') {
       this.camera.mode = BABYLON.Camera.PERSPECTIVE_CAMERA;
-      this.editCameraDistance = Math.max(this.canvasWidth, this.canvasHeight) * 1.1;
+      this.editCameraDistance = this.getDefaultEditCameraDistance();
       this.updateEditCamera();
       this.camera.fov = BABYLON.Tools.ToRadians(45);
       this.camera.minZ = 0.1;
@@ -386,5 +407,32 @@ export class BabylonRenderer {
       }
       this.editCameraDistance = 0;
     }
+  }
+
+  adjustEditCameraDistance(deltaY) {
+    if (!this.camera || this.mode !== 'edit') {
+      return;
+    }
+
+    if (!Number.isFinite(deltaY) || deltaY === 0) {
+      return;
+    }
+
+    if (!this.editCameraDistance) {
+      this.editCameraDistance = this.getDefaultEditCameraDistance();
+    }
+
+    const minDistance = this.getMinEditCameraDistance();
+    const maxDistance = this.getMaxEditCameraDistance();
+    const normalized = Math.max(Math.min(deltaY / 120, 10), -10);
+    const scale = Math.exp(normalized * 0.12);
+    const nextDistance = Math.min(Math.max(this.editCameraDistance * scale, minDistance), maxDistance);
+
+    if (Math.abs(nextDistance - this.editCameraDistance) < 1e-3) {
+      return;
+    }
+
+    this.editCameraDistance = nextDistance;
+    this.updateEditCamera();
   }
 }

@@ -236,6 +236,15 @@ export class GameRuntime {
     }
   }
 
+  adjustEditCameraDistance(deltaY) {
+    if (!this.isEditMode) {
+      return;
+    }
+    if (typeof this.renderer.adjustEditCameraDistance === 'function') {
+      this.renderer.adjustEditCameraDistance(deltaY);
+    }
+  }
+
   setEditPlaneDepth(layerIndex) {
     const nextLayer = Number.isFinite(layerIndex) ? Math.round(layerIndex) : 0;
     this.activeEditLayer = nextLayer;
