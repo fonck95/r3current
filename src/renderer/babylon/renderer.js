@@ -409,13 +409,29 @@ export class BabylonRenderer {
           sideOrientation: BABYLON.Mesh.DOUBLESIDE,
         }, this.scene);
         break;
-      case 'triangle':
-        mesh = BABYLON.MeshBuilder.CreateDisc(name, {
-          radius: 0.5,
-          tessellation: 3,
-          sideOrientation: BABYLON.Mesh.DOUBLESIDE,
-        }, this.scene);
+      case 'triangle': {
+        mesh = new BABYLON.Mesh(name, this.scene);
+        const vertexData = new BABYLON.VertexData();
+        // Custom centered triangle that matches the physics collider (top vertex at -0.5, base at +0.5)
+        vertexData.positions = [
+          -0.5, 0.5, 0,
+           0.5, 0.5, 0,
+           0.0, -0.5, 0,
+        ];
+        vertexData.indices = [0, 1, 2];
+        vertexData.uvs = [
+          0, 1,
+          1, 1,
+          0.5, 0,
+        ];
+        vertexData.normals = [
+          0, 0, 1,
+          0, 0, 1,
+          0, 0, 1,
+        ];
+        vertexData.applyToMesh(mesh, true);
         break;
+      }
       case 'rect':
       default:
         mesh = BABYLON.MeshBuilder.CreatePlane(name, {
@@ -425,7 +441,7 @@ export class BabylonRenderer {
         break;
     }
 
-    const baseRotation = drawable.shape === 'triangle' ? Math.PI / 2 : 0;
+    const baseRotation = 0; // All meshes are authored in their canonical orientation
     mesh.metadata = { shape: drawable.shape, baseRotation };
     mesh.alwaysSelectAsActiveMesh = true;
     mesh.material = this.getMaterial(drawable.color || [1, 1, 1, 1]);
