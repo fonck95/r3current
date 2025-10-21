@@ -374,7 +374,12 @@ export class BabylonRenderer {
     );
 
     this.camera.setTarget(target);
-    this.camera.position = BABYLON.Vector3.Add(target, offset);
+    const position = target.add(offset);
+    if (this.camera.position) {
+      this.camera.position.copyFrom(position);
+    } else {
+      this.camera.position = position;
+    }
 
     if (Math.abs(Math.abs(this.editOrbitPitch) - Math.PI / 2) < 0.1) {
       this.camera.upVector = new BABYLON.Vector3(0, 0, -1);
