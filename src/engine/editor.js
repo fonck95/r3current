@@ -162,6 +162,9 @@ export class LevelEditor {
     }
     this.editMode = nextValue;
     this.applyEditModeClasses();
+    if (typeof this.game.setEditMode === 'function') {
+      this.game.setEditMode(this.editMode);
+    }
     if (!this.editMode) {
       this.selectedBrick = null;
       this.draggedBrick = null;
