@@ -1,3 +1,5 @@
+import { FLOOR_HEIGHT } from '../core/constants.js';
+
 // Physics world with proper shape collisions, rotation, friction, gravity
 const GRAVITY = 1800;
 const FRICTION = 0.85;
@@ -8,7 +10,7 @@ export function createWorld(width, height) {
     width,
     height,
     bodies: [],
-    bricks: []
+    bricks: [],
   };
 }
 
@@ -63,7 +65,7 @@ export function step(world, dt) {
     }
 
     // Floor collision
-    const floorY = world.height - 60;
+    const floorY = world.height - FLOOR_HEIGHT;
     if (body.y + body.h > floorY) {
       body.y = floorY - body.h;
       body.vy = 0;
