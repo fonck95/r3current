@@ -16,19 +16,49 @@ const DEFAULT_COLORS = [
 const MIN_BRICK_SIZE = 10;
 const HOVER_PADDING = 2;
 const SELECTION_PADDING = 4;
+const DEG2RAD = Math.PI / 180;
+const RAD2DEG = 180 / Math.PI;
+
+function normalizeColor(color) {
+  if (!Array.isArray(color)) {
+    return [0.8, 0.4, 0.2, 1.0];
+  }
+  const r = Number.isFinite(color[0]) ? color[0] : 0.8;
+  const g = Number.isFinite(color[1]) ? color[1] : 0.4;
+  const b = Number.isFinite(color[2]) ? color[2] : 0.2;
+  const a = Number.isFinite(color[3]) ? color[3] : 1.0;
+  return [r, g, b, a];
+}
+
+function makeColorKey(color) {
+  if (!Array.isArray(color)) {
+    return '';
+  }
+  return color
+    .slice(0, 4)
+    .map((component, index) => {
+      const value = Number.isFinite(component) ? component : index === 3 ? 1 : 0;
+      return value.toFixed(3);
+    })
+    .join('_');
+}
 
 export class LevelEditor {
   constructor(gameRuntime, options = {}) {
     this.game = gameRuntime;
     this.options = options;
-    this.palette = options.palette ?? DEFAULT_COLORS;
+    const paletteSource = Array.isArray(options.palette) && options.palette.length
+      ? options.palette
+      : DEFAULT_COLORS;
+    this.palette = paletteSource.map((color) => normalizeColor(color));
     this.minBrickSize = options.minBrickSize ?? MIN_BRICK_SIZE;
     this.onModeChange = options.onModeChange;
 
     this.editMode = false;
     this.panelVisible = false;
     this.selectedShape = 'rect';
-    this.selectedColor = [...(this.palette[0] ?? DEFAULT_COLORS[0])];
+    const initialColor = this.palette[0] ?? normalizeColor(DEFAULT_COLORS[0]);
+    this.selectedColor = [...initialColor];
     this.selectedRotation = 0;
 
     this.ghostBrick = null;
@@ -55,6 +85,8 @@ export class LevelEditor {
       hint: null,
       paletteContainer: null,
       viewButtons: [],
+      shapeButtons: [],
+      paletteButtons: [],
     };
 
     this.onPointerDown = this.onPointerDown.bind(this);
@@ -63,6 +95,7 @@ export class LevelEditor {
     this.onWheel = this.onWheel.bind(this);
     this.onKeyDown = this.onKeyDown.bind(this);
     this.boundPreventContextMenu = (event) => event.preventDefault();
+    this.saveRequestId = null;
   }
 
   initialize() {
@@ -82,6 +115,10 @@ export class LevelEditor {
     this.canvas.removeEventListener('wheel', this.onWheel);
     this.canvas.removeEventListener('contextmenu', this.boundPreventContextMenu);
     window.removeEventListener('keydown', this.onKeyDown);
+    if (this.saveRequestId !== null) {
+      cancelAnimationFrame(this.saveRequestId);
+      this.saveRequestId = null;
+    }
   }
 
   buildUi() {
@@ -180,28 +217,33 @@ export class LevelEditor {
 
     this.ui.paletteContainer = palette;
     palette.innerHTML = '';
+    this.ui.paletteButtons = [];
 
-    this.palette.forEach((color, index) => {
+    this.palette.forEach((color) => {
       const button = document.createElement('div');
-      button.className = `color-btn${index === 0 ? ' active' : ''}`;
-      button.style.background = `rgb(${color[0] * 255}, ${color[1] * 255}, ${color[2] * 255})`;
+      const normalized = normalizeColor(color);
+      button.className = 'color-btn';
+      button.dataset.colorKey = makeColorKey(normalized);
+      button.style.background = `rgb(${normalized[0] * 255}, ${normalized[1] * 255}, ${normalized[2] * 255})`;
       button.addEventListener('click', () => {
-        this.setSelectedColor(color);
-        palette.querySelectorAll('.color-btn').forEach((el) => el.classList.remove('active'));
-        button.classList.add('active');
+        this.setSelectedColor(normalized);
       });
       palette.appendChild(button);
+      this.ui.paletteButtons.push(button);
     });
+
+    this.updatePaletteSelection(this.selectedColor);
   }
 
   setupShapeButtons() {
-    document.querySelectorAll('.shape-btn').forEach((button) => {
+    this.ui.shapeButtons = Array.from(document.querySelectorAll('.shape-btn'));
+    this.ui.shapeButtons.forEach((button) => {
       button.addEventListener('click', () => {
-        document.querySelectorAll('.shape-btn').forEach((el) => el.classList.remove('active'));
-        button.classList.add('active');
-        this.selectedShape = button.dataset.shape || 'rect';
+        const shape = button.dataset.shape || 'rect';
+        this.setSelectedShape(shape);
       });
     });
+    this.updateShapeButtons(this.selectedShape);
   }
 
   setupRotationControls() {
@@ -210,7 +252,7 @@ export class LevelEditor {
 
     if (this.ui.rotationSlider && this.ui.rotationValue) {
       this.ui.rotationSlider.value = `${this.selectedRotation}`;
-      this.ui.rotationValue.textContent = `${this.selectedRotation}°`;
+      this.ui.rotationValue.textContent = `${Math.round(this.selectedRotation)}°`;
       this.ui.rotationSlider.addEventListener('input', (event) => {
         const value = Number.parseFloat(event.target.value);
         this.setSelectedRotation(Number.isFinite(value) ? value : 0);
@@ -291,21 +333,84 @@ export class LevelEditor {
     this.canvas.addEventListener('contextmenu', this.boundPreventContextMenu);
   }
 
-  setSelectedColor(color) {
-    this.selectedColor = [...color];
-    if (this.hoverBrick && this.options.applyHoverColor) {
-      this.hoverBrick.color = [...color];
+  setSelectedColor(color, { fromSelection = false } = {}) {
+    const normalized = normalizeColor(color);
+    this.selectedColor = [...normalized];
+    this.updatePaletteSelection(normalized);
+
+    if (this.ghostBrick) {
+      this.ghostBrick.color = [...normalized];
     }
+    if (this.hoverBrick && this.options.applyHoverColor) {
+      this.hoverBrick.color = [...normalized];
+    }
+    if (!fromSelection && this.selectedBrick) {
+      this.selectedBrick.color = [...normalized];
+      this.scheduleSave();
+    }
+
+    return this.selectedColor;
   }
 
-  setSelectedRotation(value) {
-    this.selectedRotation = value;
-    if (this.ui.rotationSlider) {
-      this.ui.rotationSlider.value = `${value}`;
+  updatePaletteSelection(color) {
+    if (!Array.isArray(this.ui.paletteButtons)) {
+      return;
+    }
+    const targetKey = makeColorKey(color);
+    this.ui.paletteButtons.forEach((button) => {
+      const isActive = button.dataset.colorKey === targetKey;
+      button.classList.toggle('active', isActive);
+    });
+  }
+
+  setSelectedShape(shape, { fromSelection = false } = {}) {
+    const nextShape = typeof shape === 'string' && shape ? shape : 'rect';
+    this.selectedShape = nextShape;
+    this.updateShapeButtons(nextShape);
+
+    if (this.ghostBrick) {
+      this.ghostBrick.shape = nextShape;
+    }
+
+    if (!fromSelection && this.selectedBrick) {
+      this.selectedBrick.shape = nextShape;
+      this.scheduleSave();
+    }
+
+    return this.selectedShape;
+  }
+
+  updateShapeButtons(activeShape) {
+    if (!Array.isArray(this.ui.shapeButtons)) {
+      return;
+    }
+
+    this.ui.shapeButtons.forEach((button) => {
+      const buttonShape = button.dataset.shape || 'rect';
+      button.classList.toggle('active', Boolean(activeShape) && buttonShape === activeShape);
+    });
+  }
+
+  setSelectedRotation(value, { fromSelection = false } = {}) {
+    const normalized = Number.isFinite(value) ? value : 0;
+    this.selectedRotation = normalized;
+    if (this.ui.rotationSlider && this.ui.rotationSlider.value !== `${normalized}`) {
+      this.ui.rotationSlider.value = `${normalized}`;
     }
     if (this.ui.rotationValue) {
-      this.ui.rotationValue.textContent = `${Math.round(value)}°`;
+      this.ui.rotationValue.textContent = `${Math.round(normalized)}°`;
     }
+
+    if (this.ghostBrick) {
+      this.ghostBrick.rotation = normalized * DEG2RAD;
+    }
+
+    if (!fromSelection && this.selectedBrick) {
+      this.selectedBrick.rotation = normalized * DEG2RAD;
+      this.scheduleSave();
+    }
+
+    return this.selectedRotation;
   }
 
   toggleEditMode(forceValue) {
@@ -351,6 +456,52 @@ export class LevelEditor {
     this.draggedBrick = null;
     this.ghostBrick = null;
     this.dragStart = null;
+    this.updateHoverHint();
+  }
+
+  applySelectionFromBrick(brickCandidate, pointerWorldPos = null) {
+    if (!brickCandidate) {
+      this.selectedBrick = null;
+      this.draggedBrick = null;
+      this.dragStart = null;
+      this.updateDeleteButton();
+      this.updateHoverHint();
+      return;
+    }
+
+    this.selectedBrick = brickCandidate;
+    this.hoverBrick = brickCandidate;
+    this.draggedBrick = null;
+    this.dragStart = null;
+
+    if (pointerWorldPos) {
+      this.draggedBrick = brickCandidate;
+      this.dragStart = {
+        x: pointerWorldPos.x - brickCandidate.x,
+        y: pointerWorldPos.y - brickCandidate.y,
+      };
+    }
+
+    const rotationDegrees = Number.isFinite(brickCandidate.rotation)
+      ? brickCandidate.rotation * RAD2DEG
+      : 0;
+    this.setSelectedShape(brickCandidate.shape || 'rect', { fromSelection: true });
+    this.setSelectedRotation(rotationDegrees, { fromSelection: true });
+    this.setSelectedColor(brickCandidate.color, { fromSelection: true });
+
+    this.updateDeleteButton();
+    this.updateHoverHint();
+  }
+
+  scheduleSave() {
+    if (this.saveRequestId !== null) {
+      return;
+    }
+
+    this.saveRequestId = requestAnimationFrame(() => {
+      this.saveRequestId = null;
+      this.saveBricks();
+    });
   }
 
   getSelectedRotation() {
@@ -525,22 +676,19 @@ export class LevelEditor {
 
     if (event.shiftKey) {
       brickCandidate.color = [...this.selectedColor];
-      this.saveBricks();
+      this.scheduleSave();
       return;
     }
 
     if (event.ctrlKey || event.metaKey) {
-      this.setSelectedRotation((brickCandidate.rotation * 180) / Math.PI);
+      const degrees = Number.isFinite(brickCandidate.rotation)
+        ? brickCandidate.rotation * RAD2DEG
+        : 0;
+      this.setSelectedRotation(degrees, { fromSelection: true });
       return;
     }
 
-    this.selectedBrick = brickCandidate;
-    this.draggedBrick = brickCandidate;
-    this.dragStart = {
-      x: pointerWorldPos.x - brickCandidate.x,
-      y: pointerWorldPos.y - brickCandidate.y,
-    };
-    this.updateDeleteButton();
+    this.applySelectionFromBrick(brickCandidate, pointerWorldPos);
   }
 
   onPointerMove(event) {
@@ -614,7 +762,7 @@ export class LevelEditor {
     }
     if (this.hoverBrick) {
       this.ui.hint.textContent =
-        'Click: Eliminar | Shift+Click: Color | Ctrl+Click: Copiar rotación | Rueda: Rotar | Alt/Ctrl+Rueda: Zoom';
+        'Click: Seleccionar/Arrastrar | Shift+Click: Recolorear | Ctrl+Click: Copiar rotación | Rueda: Rotar | Alt/Ctrl+Rueda: Zoom';
       this.ui.hint.classList.add('show');
     } else {
       this.ui.hint.classList.remove('show');
@@ -803,6 +951,10 @@ export class LevelEditor {
   }
 
   saveBricks() {
+    if (this.saveRequestId !== null) {
+      cancelAnimationFrame(this.saveRequestId);
+      this.saveRequestId = null;
+    }
     this.game.saveBricks?.();
   }
 }

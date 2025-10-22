@@ -2,7 +2,15 @@ function colorKey(color) {
   return color.map((c) => c.toFixed(4)).join('_');
 }
 
+function cloneDrawables(drawables) {
+  return drawables.map((drawable) => ({
+    ...drawable,
+    color: Array.isArray(drawable.color) ? [...drawable.color] : drawable.color,
+  }));
+}
+
 const EDIT_DEPTH_STEP = 40;
+const OVERLAY_DEPTH_OFFSET = 0.25;
 const EDIT_VIEW_PRESETS = {
   iso: { yaw: -Math.PI * 0.9, pitch: Math.PI / 12 },
   front: { yaw: Math.PI, pitch: 0 },
@@ -43,6 +51,11 @@ export class BabylonRenderer {
     this.editOrbitYaw = EDIT_VIEW_PRESETS.iso.yaw;
     this.editOrbitPitch = EDIT_VIEW_PRESETS.iso.pitch;
     this.editTargetWorldOffset = { x: 0, y: 0 };
+    this.webGpuSupport = null;
+    this.contextLost = false;
+    this.contextLostObserver = null;
+    this.contextRestoredObserver = null;
+    this.lastSyncedDrawables = [];
   }
 
   getDefaultEditCameraDistance() {
@@ -57,16 +70,40 @@ export class BabylonRenderer {
     return Math.max(this.canvasWidth, this.canvasHeight) * 8;
   }
 
+  async detectWebGpuSupport(BABYLON) {
+    if (typeof this.webGpuSupport === 'boolean') {
+      return this.webGpuSupport;
+    }
+
+    if (!BABYLON.WebGPUEngine || !BABYLON.WebGPUEngine.IsSupportedAsync) {
+      this.webGpuSupport = false;
+      return this.webGpuSupport;
+    }
+
+    try {
+      this.webGpuSupport = await BABYLON.WebGPUEngine.IsSupportedAsync;
+    } catch (error) {
+      console.warn('No se pudo determinar soporte WebGPU. Se usará WebGL.', error);
+      this.webGpuSupport = false;
+    }
+
+    return this.webGpuSupport;
+  }
+
   async createEngine(BABYLON) {
-    const supportsWebGPU =
-      BABYLON.WebGPUEngine && BABYLON.WebGPUEngine.IsSupportedAsync
-        ? await BABYLON.WebGPUEngine.IsSupportedAsync
-        : false;
+    const supportsWebGPU = await this.detectWebGpuSupport(BABYLON);
 
     if (supportsWebGPU) {
       try {
-        const engine = new BABYLON.WebGPUEngine(this.canvas);
+        const engine = new BABYLON.WebGPUEngine(this.canvas, {
+          antialiasing: true,
+          adaptToDeviceRatio: true,
+          deviceDescriptor: {
+            powerPreference: 'high-performance',
+          },
+        });
         await engine.initAsync();
+        engine.enableOfflineSupport = false;
         this.engineType = 'webgpu';
         return engine;
       } catch (error) {
@@ -74,18 +111,48 @@ export class BabylonRenderer {
       }
     }
 
+    const engine = new BABYLON.Engine(
+      this.canvas,
+      true,
+      {
+        preserveDrawingBuffer: true,
+        stencil: true,
+        disableWebGL2Support: false,
+        powerPreference: 'high-performance',
+      },
+      true,
+    );
+    engine.enableOfflineSupport = false;
     this.engineType = 'webgl';
-    return new BABYLON.Engine(this.canvas, true, {
-      preserveDrawingBuffer: true,
-      stencil: true,
-      disableWebGL2Support: false,
-    });
+    return engine;
   }
 
   async initialize() {
     const { BABYLON } = window;
 
     this.engine = await this.createEngine(BABYLON);
+
+    if (!this.engine) {
+      throw new Error('No se pudo crear el motor de Babylon.');
+    }
+
+    this.contextLost = false;
+    this.lastSyncedDrawables = [];
+
+    if (this.engine && this.engine.webGLVersion && this.engineType !== 'webgpu') {
+      this.engineType = this.engine.webGLVersion >= 2 ? 'webgl2' : 'webgl';
+    }
+
+    if (this.engine.onContextLostObservable) {
+      this.contextLostObserver = this.engine.onContextLostObservable.add(() =>
+        this.handleContextLost(),
+      );
+    }
+    if (this.engine.onContextRestoredObservable) {
+      this.contextRestoredObserver = this.engine.onContextRestoredObservable.add(() =>
+        this.handleContextRestored(),
+      );
+    }
 
     this.scene = new BABYLON.Scene(this.engine);
     this.scene.clearColor = new BABYLON.Color4(0.05, 0.05, 0.05, 1.0);
@@ -110,13 +177,28 @@ export class BabylonRenderer {
   dispose() {
     if (this.engine) {
       this.engine.stopRenderLoop();
+      if (this.contextLostObserver) {
+        this.engine.onContextLostObservable?.remove(this.contextLostObserver);
+        this.contextLostObserver = null;
+      }
+      if (this.contextRestoredObserver) {
+        this.engine.onContextRestoredObservable?.remove(this.contextRestoredObserver);
+        this.contextRestoredObserver = null;
+      }
     }
     if (this.scene) {
       this.scene.dispose();
     }
     this.materials.forEach((mat) => mat.dispose());
     this.materials.clear();
+    this.meshPool.forEach((mesh) => mesh.dispose());
     this.meshPool.clear();
+    if (this.editBackground) {
+      this.editBackground.dispose();
+    }
+    if (this.editBackgroundTexture) {
+      this.editBackgroundTexture.dispose();
+    }
     this.engine?.dispose();
     this.engine = null;
     this.scene = null;
@@ -133,6 +215,42 @@ export class BabylonRenderer {
     this.editOrbitYaw = EDIT_VIEW_PRESETS.iso.yaw;
     this.editOrbitPitch = EDIT_VIEW_PRESETS.iso.pitch;
     this.editTargetWorldOffset = { x: 0, y: 0 };
+    this.contextLost = false;
+    this.lastSyncedDrawables = [];
+  }
+
+  handleContextLost() {
+    this.contextLost = true;
+    console.warn('Babylon renderer: contexto gráfico perdido, esperando restauración.');
+  }
+
+  handleContextRestored() {
+    this.contextLost = false;
+    console.info('Babylon renderer: contexto restaurado, reconstruyendo escena.');
+    if (!this.engine || !this.scene) {
+      return;
+    }
+
+    this.materials.forEach((mat) => mat.dispose());
+    this.materials.clear();
+    this.meshPool.forEach((mesh) => mesh.dispose());
+    this.meshPool.clear();
+
+    if (this.editBackground) {
+      this.editBackground.dispose();
+      this.editBackground = null;
+    }
+    if (this.editBackgroundTexture) {
+      this.editBackgroundTexture.dispose();
+      this.editBackgroundTexture = null;
+    }
+
+    this.createEditBackground();
+
+    if (this.lastSyncedDrawables.length) {
+      const snapshot = cloneDrawables(this.lastSyncedDrawables);
+      this.syncDrawables(snapshot);
+    }
   }
 
   updateViewport() {
@@ -171,17 +289,36 @@ export class BabylonRenderer {
   }
 
   getDisplayName() {
-    return this.engineType === 'webgpu' ? 'Babylon.js WebGPU' : 'Babylon.js WebGL';
+    if (this.engineType === 'webgpu') {
+      return 'Babylon.js WebGPU';
+    }
+    if (this.engineType === 'webgl2') {
+      return 'Babylon.js WebGL2';
+    }
+    if (this.engine && this.engine.webGLVersion >= 2) {
+      return 'Babylon.js WebGL2';
+    }
+    return 'Babylon.js WebGL';
   }
 
   syncDrawables(drawables) {
-    if (!this.scene) return;
+    if (!Array.isArray(drawables)) {
+      this.lastSyncedDrawables = [];
+      return;
+    }
 
+    this.lastSyncedDrawables = cloneDrawables(drawables);
+
+    if (!this.scene || this.contextLost) {
+      return;
+    }
+
+    const source = this.lastSyncedDrawables;
     const used = new Set();
 
     let maxDepthIndex = 0;
 
-    drawables.forEach((drawable, index) => {
+    source.forEach((drawable, index) => {
       const key = drawable.id || `anon_${index}`;
       let mesh = this.meshPool.get(key);
 
@@ -468,8 +605,12 @@ export class BabylonRenderer {
     mesh.position.x = sceneX;
     mesh.position.y = sceneY;
     if (this.mode === 'edit') {
-      const depthIndex = drawable.depthIndex ?? 0;
-      mesh.position.z = drawable.layer === 'overlay' ? -EDIT_DEPTH_STEP : depthIndex * EDIT_DEPTH_STEP;
+      const depthIndex = typeof drawable.depthIndex === 'number' ? drawable.depthIndex : 0;
+      const baseDepth = depthIndex * EDIT_DEPTH_STEP;
+      mesh.position.z =
+        drawable.layer === 'overlay'
+          ? baseDepth - OVERLAY_DEPTH_OFFSET * EDIT_DEPTH_STEP
+          : baseDepth;
     } else {
       mesh.position.z = drawable.layer === 'overlay' ? 50 : 0;
     }
@@ -506,6 +647,15 @@ export class BabylonRenderer {
   createEditBackground() {
     const { BABYLON } = window;
     if (!this.scene) return;
+
+    if (this.editBackground) {
+      this.editBackground.dispose();
+      this.editBackground = null;
+    }
+    if (this.editBackgroundTexture) {
+      this.editBackgroundTexture.dispose();
+      this.editBackgroundTexture = null;
+    }
 
     this.editBackgroundTexture = new BABYLON.DynamicTexture('edit_bg_tex', { width: 1024, height: 1024 }, this.scene, true);
     const ctx = this.editBackgroundTexture.getContext();
