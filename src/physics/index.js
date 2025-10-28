@@ -3,7 +3,11 @@ import { FLOOR_HEIGHT } from '../core/constants.js';
 // Physics world with proper shape collisions, rotation, friction, gravity
 const GRAVITY = 1800;
 const FRICTION = 0.85;
+const AIR_RESISTANCE = 0.995; // Damping in air
 const MIN_VELOCITY = 0.1; // Threshold to stop small movements
+const DEFAULT_DENSITY = 1.0; // Default density for mass calculation
+const DEFAULT_RESTITUTION = 0.3; // Default bounciness (0 = no bounce, 1 = perfect bounce)
+const ANGULAR_DAMPING = 0.98; // Rotational friction
 
 export function createWorld(width, height) {
   return {
@@ -14,17 +18,49 @@ export function createWorld(width, height) {
   };
 }
 
+// Calculate mass based on shape and dimensions
+function calculateMass(shape, w, h, density = DEFAULT_DENSITY) {
+  let area;
+  switch (shape) {
+    case 'circle':
+      // Area of ellipse: π * (w/2) * (h/2)
+      const rx = w / 2;
+      const ry = h / 2;
+      area = Math.PI * rx * ry;
+      break;
+    case 'triangle':
+      // Area of triangle: (base * height) / 2
+      area = (w * h) / 2;
+      break;
+    case 'rect':
+    default:
+      // Area of rectangle: width * height
+      area = w * h;
+      break;
+  }
+  return area * density;
+}
+
 export function brick(world, x, y, w, h, opts = {}) {
+  const shape = opts.shape || 'rect';
+  const density = opts.density || DEFAULT_DENSITY;
+  const mass = opts.mass || calculateMass(shape, w, h, density);
+
   const body = {
     id: opts.id || `brick_${Date.now()}_${Math.random()}`,
     x, y, w, h,
     vx: 0, vy: 0,
     rotation: opts.rotation || 0,
+    angularVelocity: opts.angularVelocity || 0, // Rotation speed in radians per second
     isStatic: true,
     onGround: false,
-    shape: opts.shape || 'rect',
+    shape: shape,
     color: opts.color || [0.8, 0.4, 0.2, 1.0],
-    z: Number.isFinite(opts.z) ? Math.round(opts.z) : 0
+    z: Number.isFinite(opts.z) ? Math.round(opts.z) : 0,
+    mass: mass,
+    invMass: mass > 0 ? 1 / mass : 0, // Inverse mass for calculations (0 for infinite mass)
+    restitution: opts.restitution !== undefined ? opts.restitution : DEFAULT_RESTITUTION,
+    density: density
   };
   world.bodies.push(body);
   world.bricks.push(body);
@@ -43,53 +79,85 @@ export function step(world, dt) {
     // Apply gravity
     body.vy += GRAVITY * dt;
 
+    // Apply air resistance when not on ground
+    if (!body.onGround) {
+      body.vx *= AIR_RESISTANCE;
+      body.vy *= AIR_RESISTANCE;
+    }
+
+    // Apply angular damping
+    if (body.angularVelocity !== undefined) {
+      body.angularVelocity *= ANGULAR_DAMPING;
+      // Stop very small rotations
+      if (Math.abs(body.angularVelocity) < 0.01) {
+        body.angularVelocity = 0;
+      }
+    }
+
     // Store old position for collision resolution
     const oldX = body.x;
     const oldY = body.y;
+    const oldRotation = body.rotation;
 
     // Integrate velocity
     body.x += body.vx * dt;
     body.y += body.vy * dt;
 
+    // Integrate angular velocity
+    if (body.angularVelocity !== undefined) {
+      body.rotation += body.angularVelocity * dt;
+      // Normalize rotation to [-PI, PI]
+      while (body.rotation > Math.PI) body.rotation -= 2 * Math.PI;
+      while (body.rotation < -Math.PI) body.rotation += 2 * Math.PI;
+    }
+
     // Reset ground flag
     body.onGround = false;
 
-    // World bounds
+    // World bounds with restitution
     if (body.x < 0) {
       body.x = 0;
-      body.vx = 0;
+      body.vx = -body.vx * body.restitution;
+      if (Math.abs(body.vx) < MIN_VELOCITY) body.vx = 0;
     }
     if (body.x + body.w > world.width) {
       body.x = world.width - body.w;
-      body.vx = 0;
+      body.vx = -body.vx * body.restitution;
+      if (Math.abs(body.vx) < MIN_VELOCITY) body.vx = 0;
     }
 
-    // Floor collision
+    // Floor collision with restitution
     const floorY = world.height - FLOOR_HEIGHT;
     if (body.y + body.h > floorY) {
       body.y = floorY - body.h;
-      body.vy = 0;
-      body.onGround = true;
-      body.vx *= FRICTION;
+      const bounceVelocity = -body.vy * body.restitution;
+      // Only bounce if velocity is significant
+      if (Math.abs(bounceVelocity) > MIN_VELOCITY * 2) {
+        body.vy = bounceVelocity;
+      } else {
+        body.vy = 0;
+        body.onGround = true;
+        body.vx *= FRICTION;
+      }
     }
 
-    // Collision with static bodies (bricks) - check multiple times for better resolution
+    // Collision with static bodies (bricks) - increased iterations for better accuracy
     let collisionIterations = 0;
-    const maxIterations = 3;
-    
+    const maxIterations = 5; // Increased from 3 to 5 for better precision
+
     while (collisionIterations < maxIterations) {
       let hadCollision = false;
-      
+
       for (const other of world.bodies) {
         if (!other.isStatic || other === body) continue;
-        
+
         const result = detectCollision(body, other);
         if (result.colliding) {
           resolveCollision(body, other, result);
           hadCollision = true;
         }
       }
-      
+
       if (!hadCollision) break;
       collisionIterations++;
     }
@@ -377,41 +445,104 @@ function projectPolygon(vertices, axis) {
 
 function resolveCollision(body, other, result) {
   const { overlap, normal } = result;
-  
-  // Move body out of collision along normal
+
+  // Move body out of collision along normal (positional correction)
   body.x += normal.x * overlap;
   body.y += normal.y * overlap;
-  
-  // Determine if this is a ground collision
-  // Normal pointing up means we're on top of something
+
+  // Calculate relative velocity
+  const relVelX = body.vx - (other.vx || 0);
+  const relVelY = body.vy - (other.vy || 0);
+
+  // Calculate relative velocity in collision normal direction
+  const velAlongNormal = relVelX * normal.x + relVelY * normal.y;
+
+  // Do not resolve if velocities are separating
+  if (velAlongNormal > 0) {
+    return;
+  }
+
+  // Calculate restitution (use minimum of both bodies for more realistic behavior)
+  const restitution = Math.min(body.restitution, other.restitution || body.restitution);
+
+  // Calculate impulse scalar with mass consideration
+  // For static objects (other), treat as infinite mass (invMass = 0)
+  const bodyInvMass = body.invMass || 0;
+  const otherInvMass = other.isStatic ? 0 : (other.invMass || 0);
+  const invMassSum = bodyInvMass + otherInvMass;
+
+  if (invMassSum === 0) {
+    return; // Both objects have infinite mass
+  }
+
+  // Calculate impulse magnitude
+  let impulseMagnitude = -(1 + restitution) * velAlongNormal;
+  impulseMagnitude /= invMassSum;
+
+  // Apply impulse to body
+  const impulseX = impulseMagnitude * normal.x;
+  const impulseY = impulseMagnitude * normal.y;
+
+  body.vx += impulseX * bodyInvMass;
+  body.vy += impulseY * bodyInvMass;
+
+  // Apply impulse to other if not static
+  if (!other.isStatic && otherInvMass > 0) {
+    other.vx -= impulseX * otherInvMass;
+    other.vy -= impulseY * otherInvMass;
+  }
+
+  // Determine collision type for special handling
   const isGroundCollision = normal.y < -0.3;
   const isCeilingCollision = normal.y > 0.3;
   const isWallCollision = Math.abs(normal.y) < 0.7;
-  
+
+  // Apply friction for ground collisions
   if (isGroundCollision) {
-    // Landing on top of platform
     body.onGround = true;
-    body.vy = 0;
-    body.vx *= FRICTION;
+
+    // Tangent friction (perpendicular to normal)
+    const tangentX = -normal.y;
+    const tangentY = normal.x;
+
+    const velAlongTangent = relVelX * tangentX + relVelY * tangentY;
+
+    // Coulomb friction model
+    const frictionCoefficient = FRICTION;
+    const frictionMagnitude = Math.abs(velAlongTangent) * frictionCoefficient;
+
+    const frictionImpulseX = -tangentX * frictionMagnitude * bodyInvMass;
+    const frictionImpulseY = -tangentY * frictionMagnitude * bodyInvMass;
+
+    body.vx += frictionImpulseX;
+    body.vy += frictionImpulseY;
+
+    // Clamp small velocities
+    if (Math.abs(body.vx) < MIN_VELOCITY) body.vx = 0;
+    if (Math.abs(body.vy) < MIN_VELOCITY) body.vy = 0;
   } else if (isCeilingCollision) {
-    // Hitting head on ceiling
+    // Additional damping for ceiling hits
     if (body.vy < 0) {
-      body.vy = 0;
+      body.vy *= 0.5;
     }
-  } else if (isWallCollision) {
-    // Hitting a wall
-    const velDot = body.vx * normal.x + body.vy * normal.y;
-    if (velDot < 0) {
-      body.vx -= normal.x * velDot;
-      body.vy -= normal.y * velDot;
-    }
-  } else {
-    // General collision - stop velocity in direction of normal
-    const velDot = body.vx * normal.x + body.vy * normal.y;
-    if (velDot < 0) {
-      body.vx -= normal.x * velDot * 0.8;
-      body.vy -= normal.y * velDot * 0.8;
-    }
+  }
+
+  // Calculate contact point for angular velocity effects (more advanced physics)
+  if (body.angularVelocity !== undefined && !isGroundCollision) {
+    // Simple torque calculation based on collision offset from center
+    const centerX = body.x + body.w / 2;
+    const centerY = body.y + body.h / 2;
+
+    // Approximate contact point (center + normal * some offset)
+    const contactOffsetX = normal.x * Math.min(body.w, body.h) * 0.5;
+    const contactOffsetY = normal.y * Math.min(body.w, body.h) * 0.5;
+
+    // Calculate torque (cross product of contact offset and impulse)
+    const torque = contactOffsetX * impulseY - contactOffsetY * impulseX;
+
+    // Apply angular impulse (simplified - proper implementation would use moment of inertia)
+    const angularImpulse = torque / (body.mass * 100); // Scaled for gameplay
+    body.angularVelocity += angularImpulse;
   }
 }
 
@@ -462,7 +593,10 @@ export function serializeBricks(world) {
     shape: b.shape,
     color: b.color,
     rotation: b.rotation,
-    z: typeof b.z === 'number' ? b.z : 0
+    z: typeof b.z === 'number' ? b.z : 0,
+    // Include physics properties if they differ from defaults
+    density: b.density !== DEFAULT_DENSITY ? b.density : undefined,
+    restitution: b.restitution !== DEFAULT_RESTITUTION ? b.restitution : undefined
   }));
 }
 
@@ -475,7 +609,9 @@ export function loadBricks(world, data) {
         shape: item.shape || 'rect',
         color: item.color || [0.8, 0.4, 0.2, 1.0],
         rotation: item.rotation || 0,
-        z: Number.isFinite(item.z) ? Math.round(item.z) : 0
+        z: Number.isFinite(item.z) ? Math.round(item.z) : 0,
+        density: item.density,
+        restitution: item.restitution
       });
     }
   });

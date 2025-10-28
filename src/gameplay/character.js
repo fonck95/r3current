@@ -20,30 +20,39 @@ export class Character {
     this.y = y;
     this.w = options.w || 40;
     this.h = options.h || 48;
-    
+
     // Velocidad
     this.vx = 0;
     this.vy = 0;
-    
+
     // Propiedades físicas para el motor
     this.isStatic = false;
     this.onGround = false;
     this.shape = 'rect';
     this.rotation = 0;
+    this.angularVelocity = 0; // Velocidad angular en radianes/segundo
     this.id = options.id || `character_${Date.now()}`;
-    
+
+    // Propiedades físicas realistas
+    const density = options.density !== undefined ? options.density : 1.0;
+    const area = this.w * this.h; // Área del rectángulo de colisión
+    this.mass = options.mass !== undefined ? options.mass : area * density;
+    this.invMass = this.mass > 0 ? 1 / this.mass : 0;
+    this.restitution = options.restitution !== undefined ? options.restitution : 0.2; // Personajes rebotan poco
+    this.density = density;
+
     // Sistema de animación (completamente desacoplado del tamaño físico)
     const animSpec = {
       proportions: { ...DEFAULT_SPEC.proportions, ...(options.appearance?.proportions || {}) },
       colors: { ...DEFAULT_SPEC.colors, ...(options.appearance?.colors || {}) }
     };
     const animConfig = { ...DEFAULT_CONFIG, ...(options.animation || {}) };
-    
-    this.animationController = new AnimationController({ 
-      spec: animSpec, 
-      config: animConfig 
+
+    this.animationController = new AnimationController({
+      spec: animSpec,
+      config: animConfig
     });
-    
+
     // Inicializar posición visual
     this.animationController.visualX = x + this.w * 0.5;
     this.animationController.visualY = y + this.h * 0.5;
